@@ -8,6 +8,7 @@ import io
 # =========================================================
 # PAGE CONFIG
 # =========================================================
+
 st.set_page_config(
     page_title="EduMate AI Ultra Pro",
     page_icon="😎",
@@ -19,6 +20,7 @@ st.set_page_config(
 # =========================================================
 # MODELS
 # =========================================================
+
 TEXT_MODELS = [
     "llama3.2",
     "mistral",
@@ -26,13 +28,14 @@ TEXT_MODELS = [
     "phi3"
 ]
 
-# Vision model for image questions
+# Vision model used for image questions
 VISION_MODEL = "llava:7b"
 
 
 # =========================================================
 # CUSTOM CSS
 # =========================================================
+
 st.markdown("""
 <style>
 
@@ -138,13 +141,8 @@ section[data-testid="stSidebar"] {
 
 
 /* =====================================================
-   SELECTBOX
+   SELECTBOX SPACING
    ===================================================== */
-
-/*
-   Give the sidebar controls enough room below them.
-   Streamlit decides the actual popover direction.
-*/
 
 section[data-testid="stSidebar"] div[data-testid="stSelectbox"] {
     margin-bottom: 8px;
@@ -166,6 +164,7 @@ section[data-testid="stSidebar"] div[data-testid="stSelectbox"] {
 # =========================================================
 # SESSION STATE
 # =========================================================
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -182,6 +181,7 @@ if "selected_mode" not in st.session_state:
 # =========================================================
 # OPTIONS
 # =========================================================
+
 class_options = [
     "Class 6",
     "Class 7",
@@ -193,6 +193,7 @@ class_options = [
     "Ungraduated",
     "Pregraduated"
 ]
+
 
 subject_options = [
     "All Subjects",
@@ -213,10 +214,12 @@ subject_options = [
     "Reasoning"
 ]
 
+
 voice_languages = {
     "English (India)": "en-IN",
     "Hindi (India)": "hi-IN"
 }
+
 
 mode_descriptions = {
     "Smart Reasoning":
@@ -236,6 +239,7 @@ mode_descriptions = {
 # =========================================================
 # SIDEBAR
 # =========================================================
+
 with st.sidebar:
 
     st.markdown(
@@ -249,8 +253,9 @@ with st.sidebar:
 
 
     # =====================================================
-    # MODEL
+    # AI MODEL
     # =====================================================
+
     st.subheader("🤖 AI Model")
 
     selected_model = st.selectbox(
@@ -262,8 +267,9 @@ with st.sidebar:
 
 
     # =====================================================
-    # CLASS
+    # LEVEL / CLASS
     # =====================================================
+
     st.subheader("📚 Level / Class")
 
     selected_class = st.selectbox(
@@ -281,6 +287,7 @@ with st.sidebar:
     # =====================================================
     # SUBJECT
     # =====================================================
+
     st.subheader("📖 Subject")
 
     selected_subject = st.selectbox(
@@ -298,6 +305,7 @@ with st.sidebar:
     # =====================================================
     # VOICE
     # =====================================================
+
     st.subheader("🎙️ Voice")
 
     voice_language_name = st.selectbox(
@@ -307,7 +315,9 @@ with st.sidebar:
         key="voice_language_selector"
     )
 
-    voice_language = voice_languages[voice_language_name]
+    voice_language = voice_languages[
+        voice_language_name
+    ]
 
     st.caption(
         "Voice-to-text requires internet."
@@ -320,6 +330,7 @@ with st.sidebar:
     # =====================================================
     # SETTINGS
     # =====================================================
+
     st.subheader("⚙️ Settings")
 
     max_tokens = st.slider(
@@ -339,12 +350,28 @@ with st.sidebar:
     )
 
 
+    # =====================================================
+    # CLEAR CHAT
+    # =====================================================
+
+    st.markdown("---")
+
+    st.subheader("🗑️ Chat")
+
+    if st.button(
+        "🗑️ Clear Chat",
+        use_container_width=True
+    ):
+        st.session_state.messages = []
+        st.rerun()
+
+
     st.markdown("---")
 
     st.markdown(
         """
         <div class="small-note">
-            Powered by Ollama<br>
+            Developed by Vaibhav gupta<br>
             EduMate AI Ultra Pro
         </div>
         """,
@@ -355,6 +382,7 @@ with st.sidebar:
 # =========================================================
 # MAIN HEADER
 # =========================================================
+
 st.markdown(
     '<div class="main-title">😎 EduMate AI Ultra Pro</div>',
     unsafe_allow_html=True
@@ -373,6 +401,7 @@ st.markdown(
 # =========================================================
 # SMALL CURRENT STATUS BOX
 # =========================================================
+
 st.markdown(
     f"""
     <div class="current-status-box">
@@ -391,6 +420,7 @@ st.markdown(
 # =========================================================
 # CURRENT MODE INFO
 # =========================================================
+
 current_mode = st.session_state.selected_mode
 
 st.markdown(
@@ -407,8 +437,9 @@ st.markdown(
 
 
 # =========================================================
-# FOUR LEARNING MODES
+# FOUR LEARNING MODE BOXES
 # =========================================================
+
 st.subheader("⚡ Choose Your Learning Mode")
 
 mode_col1, mode_col2, mode_col3, mode_col4 = st.columns(4)
@@ -460,6 +491,7 @@ st.markdown("---")
 # =========================================================
 # SYSTEM PROMPT
 # =========================================================
+
 def build_system_prompt():
 
     current_class = st.session_state.selected_class
@@ -541,12 +573,15 @@ STANDARD MODE:
 # =========================================================
 # DISPLAY CHAT HISTORY
 # =========================================================
+
 for message in st.session_state.messages:
 
     if message["role"] == "user":
 
         with st.chat_message("user"):
-            st.markdown(message["content"])
+            st.markdown(
+                message["content"]
+            )
 
     elif message["role"] == "assistant":
 
@@ -554,12 +589,15 @@ for message in st.session_state.messages:
             "assistant",
             avatar="😎"
         ):
-            st.markdown(message["content"])
+            st.markdown(
+                message["content"]
+            )
 
 
 # =========================================================
 # INPUT FORM
 # =========================================================
+
 with st.form(
     "chat_form",
     clear_on_submit=True
@@ -571,7 +609,9 @@ with st.form(
         label_visibility="collapsed"
     )
 
+
     st.markdown("##### 🎙️ Voice / 📷 Image")
+
 
     input_col1, input_col2 = st.columns(2)
 
@@ -579,6 +619,7 @@ with st.form(
     # =====================================================
     # VOICE RECORDER
     # =====================================================
+
     with input_col1:
 
         voice_file = st.audio_input(
@@ -590,6 +631,7 @@ with st.form(
     # =====================================================
     # IMAGE UPLOAD
     # =====================================================
+
     with input_col2:
 
         image_file = st.file_uploader(
@@ -600,6 +642,7 @@ with st.form(
 
     st.markdown("")
 
+
     submit = st.form_submit_button(
         "📤 Send",
         use_container_width=True
@@ -609,11 +652,13 @@ with st.form(
 # =========================================================
 # PROCESS INPUT
 # =========================================================
+
 if submit:
 
     # -----------------------------------------------------
     # TYPED TEXT
     # -----------------------------------------------------
+
     typed_text = user_input.strip()
 
     voice_text = ""
@@ -622,6 +667,7 @@ if submit:
     # -----------------------------------------------------
     # VOICE -> TEXT
     # -----------------------------------------------------
+
     if voice_file is not None:
 
         try:
@@ -634,11 +680,18 @@ if submit:
 
                 audio_bytes = voice_file.getvalue()
 
+                if not audio_bytes:
+                    raise RuntimeError(
+                        "The recorded audio is empty."
+                    )
+
                 audio_stream = io.BytesIO(
                     audio_bytes
                 )
 
-                with sr.AudioFile(audio_stream) as source:
+                with sr.AudioFile(
+                    audio_stream
+                ) as source:
 
                     recorded_audio = recognizer.record(
                         source
@@ -649,6 +702,7 @@ if submit:
                     language=voice_language
                 )
 
+
         except sr.UnknownValueError:
 
             st.error(
@@ -658,6 +712,7 @@ if submit:
 
             st.stop()
 
+
         except sr.RequestError:
 
             st.error(
@@ -666,6 +721,7 @@ if submit:
             )
 
             st.stop()
+
 
         except Exception as e:
 
@@ -679,6 +735,7 @@ if submit:
     # -----------------------------------------------------
     # FINAL MESSAGE
     # -----------------------------------------------------
+
     if typed_text:
 
         final_text = typed_text
@@ -707,6 +764,7 @@ if submit:
     # -----------------------------------------------------
     # SAVE USER MESSAGE
     # -----------------------------------------------------
+
     st.session_state.messages.append(
         {
             "role": "user",
@@ -720,6 +778,7 @@ if submit:
         # =================================================
         # IMAGE REQUEST
         # =================================================
+
         if image_file is not None:
 
             with st.spinner(
@@ -739,6 +798,8 @@ if submit:
                 ).decode("utf-8")
 
 
+                # Only current image + question
+                # are sent to vision model.
                 vision_messages = [
 
                     {
@@ -753,6 +814,7 @@ if submit:
                             image_base64
                         ]
                     }
+
                 ]
 
 
@@ -767,8 +829,9 @@ if submit:
 
 
         # =================================================
-        # NORMAL TEXT / VOICE REQUEST
+        # NORMAL TEXT / VOICE
         # =================================================
+
         else:
 
             with st.spinner(
@@ -796,8 +859,9 @@ if submit:
 
 
         # =================================================
-        # GET RESPONSE
+        # EXTRACT RESPONSE
         # =================================================
+
         ai_response = (
             response
             .get("message", {})
@@ -816,6 +880,7 @@ if submit:
         # =================================================
         # SAVE AI RESPONSE
         # =================================================
+
         st.session_state.messages.append(
             {
                 "role": "assistant",
@@ -827,19 +892,22 @@ if submit:
     except Exception as e:
 
         # -------------------------------------------------
-        # REMOVE FAILED MESSAGE
+        # REMOVE FAILED USER MESSAGE
         # -------------------------------------------------
+
         if (
             st.session_state.messages
             and st.session_state.messages[-1]["role"] == "user"
             and st.session_state.messages[-1]["content"] == final_text
         ):
+
             st.session_state.messages.pop()
 
 
         # -------------------------------------------------
         # IMAGE ERROR
         # -------------------------------------------------
+
         if image_file is not None:
 
             st.error(
@@ -857,9 +925,11 @@ is available in `ollama list`.
 """
             )
 
+
         # -------------------------------------------------
         # NORMAL ERROR
         # -------------------------------------------------
+
         else:
 
             st.error(
@@ -881,6 +951,7 @@ Error:
 # =========================================================
 # FOOTER
 # =========================================================
+
 st.markdown("---")
 
 st.caption(
@@ -888,5 +959,5 @@ st.caption(
     f"{st.session_state.selected_class} • "
     f"{st.session_state.selected_subject} • "
     f"{st.session_state.selected_mode} • "
-    f"Powered by Ollama"
+    f"Developed by Vaibhav Gupta"
 )
