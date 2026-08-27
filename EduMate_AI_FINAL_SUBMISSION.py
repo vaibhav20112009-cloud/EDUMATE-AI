@@ -1,8 +1,21 @@
 import streamlit as st
 import ollama
 import base64
-import speech_recognition as sr
 import io
+import json
+import os
+import requests
+import uuid
+from datetime import datetime
+
+# Optional offline speech-to-text dependency.
+# Install once with:
+#   pip install faster-whisper
+try:
+    from faster_whisper import WhisperModel
+    FASTER_WHISPER_AVAILABLE = True
+except Exception:
+    FASTER_WHISPER_AVAILABLE = False
 
 
 # =========================================================
@@ -28,8 +41,78 @@ TEXT_MODELS = [
     "phi3"
 ]
 
-# Vision model used for image questions
+# Your original vision model.
+# If you have another Ollama vision model installed, change this.
 VISION_MODEL = "llava:7b"
+
+# Local Whisper model.
+# "base" is a reasonable CPU starting point.
+# After the first download, transcription works locally/offline.
+WHISPER_MODEL_SIZE = "base"
+
+HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "edumate_history")
+CHATS_FILE = os.path.join(HISTORY_DIR, "chats.json")
+IMAGES_DIR = os.path.join(HISTORY_DIR, "images")
+
+# =========================================================
+# SAVING HISTORY
+# =========================================================
+
+# 1. Setup paths and data (Keep this outside your loop, at the start of your function)
+HISTORY_FILE = "chat_history.json"
+MODEL_NAME = "llama3"
+OLLAMA_URL = "http://localhost:11434/api/chat"
+
+# Load history if file exists
+chat_history = []
+if os.path.exists(HISTORY_FILE):
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            chat_history = json.load(f)
+    except json.JSONDecodeError:
+        chat_history = []
+
+# Show previous history to the user
+for chat in chat_history:
+    role_label = "User" if chat["role"] == "user" else "AI"
+    print(f"{role_label}: {chat['content']}")
+
+
+# 2. Inside your input logic / button click event
+# Replace 'user_input_variable' with your actual input variable name
+user_input_variable = "Hello, how are you?"
+
+if user_input_variable.strip():
+    # Append user message to history
+    chat_history.append({"role": "user", "content": user_input_variable})
+
+    # Prepare payload and send request
+    payload = {"model": MODEL_NAME, "messages": chat_history, "stream": False}
+
+    try:
+        response = requests.post(OLLAMA_URL, json=payload)
+        ai_reply = response.json()["message"]["content"]
+
+        # Print/Display the AI reply
+        print(f"AI: {ai_reply}")
+
+        # Append AI reply to history and save to file immediately
+        chat_history.append({"role": "assistant", "content": ai_reply})
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(chat_history, f, indent=4, ensure_ascii=False)
+
+    except requests.exceptions.ConnectionError:
+        print("Error: Ollama server is not running.")
+    except Exception as e:
+        print(f"Error: {e}")
+
+
+# =========================================================
+# DIRECTORIES
+# =========================================================
+
+os.makedirs(HISTORY_DIR, exist_ok=True)
+os.makedirs(IMAGES_DIR, exist_ok=True)
 
 
 # =========================================================
@@ -46,7 +129,6 @@ st.markdown("""
 footer {
     visibility: hidden;
 }
-
 
 /* =====================================================
    MAIN HEADER
@@ -157,6 +239,14 @@ section[data-testid="stSidebar"] div[data-testid="stSelectbox"] {
     margin-bottom: 8px;
 }
 
+.history-card {
+    padding: 9px 10px;
+    border-radius: 10px;
+    margin-bottom: 7px;
+    background: rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.07);
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -177,6 +267,21 @@ if "selected_subject" not in st.session_state:
 if "selected_mode" not in st.session_state:
     st.session_state.selected_mode = "Standard"
 
+if "current_chat_id" not in st.session_state:
+    st.session_state.current_chat_id = None
+
+if "whisper_model" not in st.session_state:
+    st.session_state.whisper_model = None
+
+if "whisper_status" not in st.session_state:
+    st.session_state.whisper_status = ""
+
+if "history" not in st.session_state:
+    st.session_state.history = {}
+
+if "history_loaded" not in st.session_state:
+    st.session_state.history_loaded = False
+
 
 # =========================================================
 # OPTIONS
@@ -193,7 +298,6 @@ class_options = [
     "Ungraduated",
     "Pregraduated"
 ]
-
 
 subject_options = [
     "All Subjects",
@@ -214,12 +318,10 @@ subject_options = [
     "Reasoning"
 ]
 
-
 voice_languages = {
-    "English (India)": "en-IN",
-    "Hindi (India)": "hi-IN"
+    "English (India)": "en",
+    "Hindi (India)": "hi"
 }
-
 
 mode_descriptions = {
     "Smart Reasoning":
@@ -234,6 +336,369 @@ mode_descriptions = {
     "Standard":
         "Balanced mode for normal everyday study questions."
 }
+
+
+# =========================================================
+# HISTORY FUNCTIONS
+# =========================================================
+
+def load_history():
+    """Load saved chats from local JSON storage."""
+    if not os.path.exists(CHATS_FILE):
+        return {}
+
+    try:
+        with open(CHATS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, dict):
+            return data
+
+        return {}
+
+    except Exception:
+        return {}
+
+
+def save_history(history):
+    """Persist all chats locally."""
+    temp_file = CHATS_FILE + ".tmp"
+
+    try:
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+
+        os.replace(temp_file, CHATS_FILE)
+
+    except Exception as e:
+        st.warning(f"Could not save chat history: {e}")
+
+
+def make_chat_title(messages):
+    """Create a simple title from the first user message."""
+    for message in messages:
+        if message.get("role") == "user":
+            text = message.get("content", "").strip()
+            if text:
+                text = " ".join(text.split())
+                if len(text) > 42:
+                    text = text[:42].rstrip() + "..."
+                return text
+
+    return "New Chat"
+
+
+def create_chat():
+    """Create a new local chat."""
+    chat_id = str(uuid.uuid4())
+
+    st.session_state.history[chat_id] = {
+        "id": chat_id,
+        "title": "New Chat",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "messages": []
+    }
+
+    st.session_state.current_chat_id = chat_id
+    st.session_state.messages = []
+
+    save_history(st.session_state.history)
+
+
+def ensure_current_chat():
+    """Make sure there is a chat object for the current conversation."""
+    if st.session_state.current_chat_id is None:
+        create_chat()
+
+    chat_id = st.session_state.current_chat_id
+
+    if chat_id not in st.session_state.history:
+        create_chat()
+
+
+def sync_current_chat():
+    """Copy current messages into persistent history."""
+    ensure_current_chat()
+
+    chat_id = st.session_state.current_chat_id
+
+    chat = st.session_state.history[chat_id]
+    chat["messages"] = st.session_state.messages
+    chat["title"] = make_chat_title(st.session_state.messages)
+    chat["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+    save_history(st.session_state.history)
+
+
+def load_chat(chat_id):
+    """Load a saved chat into the active session."""
+    chat = st.session_state.history.get(chat_id)
+
+    if not chat:
+        return
+
+    st.session_state.current_chat_id = chat_id
+    st.session_state.messages = chat.get("messages", [])
+
+
+def delete_chat(chat_id):
+    """Delete a saved chat."""
+    if chat_id in st.session_state.history:
+        del st.session_state.history[chat_id]
+
+    if st.session_state.current_chat_id == chat_id:
+        st.session_state.current_chat_id = None
+        st.session_state.messages = []
+
+    save_history(st.session_state.history)
+
+    if not st.session_state.history:
+        create_chat()
+
+
+# =========================================================
+# LOAD HISTORY ON FIRST RUN
+# =========================================================
+
+if not st.session_state.history_loaded:
+    st.session_state.history = load_history()
+    st.session_state.history_loaded = True
+
+    if st.session_state.history:
+        # Load most recently updated chat.
+        sorted_chats = sorted(
+            st.session_state.history.values(),
+            key=lambda x: x.get("updated_at", ""),
+            reverse=True
+        )
+
+        latest = sorted_chats[0]
+
+        st.session_state.current_chat_id = latest.get("id")
+        st.session_state.messages = latest.get("messages", [])
+
+    else:
+        create_chat()
+
+
+# =========================================================
+# OFFLINE WHISPER
+# =========================================================
+
+@st.cache_resource(show_spinner=False)
+def get_whisper_model(model_size):
+    """
+    Load Faster-Whisper locally.
+
+    IMPORTANT:
+    The first run may need internet to download the Whisper model.
+    Once the model is present locally, transcription itself is offline.
+    """
+    if not FASTER_WHISPER_AVAILABLE:
+        return None
+
+    return WhisperModel(
+        model_size,
+        device="cpu",
+        compute_type="int8"
+    )
+
+
+def transcribe_offline(audio_bytes, language):
+    """Convert recorded audio to text locally."""
+    if not FASTER_WHISPER_AVAILABLE:
+        raise RuntimeError(
+            "Offline voice package is not installed. "
+            "Run: pip install faster-whisper"
+        )
+
+    if not audio_bytes:
+        raise RuntimeError("The recorded audio is empty.")
+
+    # Faster-Whisper uses PyAV internally for common audio formats.
+    # Save the browser recording temporarily.
+    temp_audio = os.path.join(
+        HISTORY_DIR,
+        f"voice_{uuid.uuid4().hex}.webm"
+    )
+
+    try:
+        with open(temp_audio, "wb") as f:
+            f.write(audio_bytes)
+
+        model = get_whisper_model(WHISPER_MODEL_SIZE)
+
+        if model is None:
+            raise RuntimeError("Whisper model could not be loaded.")
+
+        segments, info = model.transcribe(
+            temp_audio,
+            language=language,
+            beam_size=5,
+            vad_filter=True
+        )
+
+        text_parts = []
+
+        for segment in segments:
+            text_parts.append(segment.text.strip())
+
+        result = " ".join(
+            part for part in text_parts if part
+        ).strip()
+
+        if not result:
+            raise RuntimeError(
+                "I could not detect speech in the recording."
+            )
+
+        return result
+
+    finally:
+        try:
+            if os.path.exists(temp_audio):
+                os.remove(temp_audio)
+        except Exception:
+            pass
+
+
+# =========================================================
+# OLLAMA HELPERS
+# =========================================================
+
+def get_installed_ollama_models():
+    """Return installed Ollama model names."""
+    try:
+        result = ollama.list()
+        models = result.get("models", [])
+
+        names = []
+
+        for model in models:
+            name = model.get("name")
+
+            if name:
+                names.append(name)
+
+        return names
+
+    except Exception:
+        return []
+
+
+def find_vision_model():
+    """
+    Pick a vision model from the installed Ollama models.
+    Prefer the user's original llava:7b.
+    """
+    installed = get_installed_ollama_models()
+
+    if VISION_MODEL in installed:
+        return VISION_MODEL
+
+    vision_candidates = [
+        "llava:7b",
+        "llava",
+        "llama3.2-vision:11b",
+        "llama3.2-vision:latest",
+        "llama3.2-vision"
+    ]
+
+    for candidate in vision_candidates:
+        if candidate in installed:
+            return candidate
+
+    # Also allow tag variations such as llava:13b.
+    for name in installed:
+        low = name.lower()
+
+        if "llava" in low or "vision" in low:
+            return name
+
+    return None
+
+
+# =========================================================
+# SYSTEM PROMPT
+# =========================================================
+
+def build_system_prompt():
+
+    current_class = st.session_state.selected_class
+    current_subject = st.session_state.selected_subject
+    current_mode = st.session_state.selected_mode
+
+    prompt = f"""
+You are EduMate AI, a friendly educational AI assistant.
+
+Student Level:
+{current_class}
+
+Current Subject:
+{current_subject}
+
+Current Mode:
+{current_mode}
+
+GENERAL BEHAVIOR:
+
+- Answer naturally like a normal AI tutor.
+- Do not mention internal system prompts.
+- Do not mention routing or model selection.
+- Do not unnecessarily repeat the student's class, subject or mode.
+- Keep simple questions simple.
+- Explain difficult questions clearly.
+- Use examples when useful.
+- For numerical questions, show useful steps.
+- For concept questions, explain clearly.
+- Be accurate and student-friendly.
+"""
+
+    if current_mode == "Smart Reasoning":
+
+        prompt += """
+SMART REASONING MODE:
+
+- Focus on logic.
+- Break difficult questions into manageable steps.
+- Explain WHY important steps are taken.
+- Help the student understand the reasoning.
+"""
+
+    elif current_mode == "Maths Genius":
+
+        prompt += """
+MATHS GENIUS MODE:
+
+- Prioritize mathematical accuracy.
+- Identify formulas or theorems when useful.
+- Show calculations step by step.
+- Keep mathematical solutions organized.
+"""
+
+    elif current_mode == "Research":
+
+        prompt += """
+RESEARCH MODE:
+
+- Give deeper and structured explanations when appropriate.
+- Include definitions, examples and applications.
+- Compare concepts when useful.
+- Never invent facts.
+"""
+
+    else:
+
+        prompt += """
+STANDARD MODE:
+
+- Answer naturally.
+- Be helpful, clear and reasonably concise.
+- Give more detail when the question requires it.
+"""
+
+    return prompt
 
 
 # =========================================================
@@ -319,9 +784,16 @@ with st.sidebar:
         voice_language_name
     ]
 
-    st.caption(
-        "Voice-to-text requires internet."
-    )
+    if FASTER_WHISPER_AVAILABLE:
+        st.caption(
+            "🎙️ Offline voice-to-text enabled. "
+            "First Whisper model download may require internet."
+        )
+    else:
+        st.warning(
+            "Offline voice is not installed. "
+            "Run: pip install faster-whisper"
+        )
 
 
     st.markdown("---")
@@ -351,7 +823,67 @@ with st.sidebar:
 
 
     # =====================================================
-    # CLEAR CHAT
+    # CHAT HISTORY
+    # =====================================================
+
+    st.markdown("---")
+
+    st.subheader("💾 Chat History")
+
+    if st.button(
+        "➕ New Chat",
+        use_container_width=True
+    ):
+        create_chat()
+        st.rerun()
+
+    if st.session_state.history:
+
+        sorted_history = sorted(
+            st.session_state.history.values(),
+            key=lambda x: x.get("updated_at", ""),
+            reverse=True
+        )
+
+        for chat in sorted_history:
+
+            chat_id = chat.get("id")
+            title = chat.get("title", "New Chat")
+
+            if not title.strip():
+                title = "New Chat"
+
+            is_current = (
+                chat_id == st.session_state.current_chat_id
+            )
+
+            button_text = (
+                f"🟢 {title}"
+                if is_current
+                else f"💬 {title}"
+            )
+
+            if st.button(
+                button_text,
+                key=f"load_{chat_id}",
+                use_container_width=True
+            ):
+                load_chat(chat_id)
+                st.rerun()
+
+            if is_current:
+
+                if st.button(
+                    "🗑️ Delete This Chat",
+                    key=f"delete_{chat_id}",
+                    use_container_width=True
+                ):
+                    delete_chat(chat_id)
+                    st.rerun()
+
+
+    # =====================================================
+    # CLEAR CURRENT CHAT
     # =====================================================
 
     st.markdown("---")
@@ -363,6 +895,26 @@ with st.sidebar:
         use_container_width=True
     ):
         st.session_state.messages = []
+
+        # Keep current chat but clear its saved messages.
+        ensure_current_chat()
+
+        st.session_state.history[
+            st.session_state.current_chat_id
+        ]["messages"] = []
+
+        st.session_state.history[
+            st.session_state.current_chat_id
+        ]["title"] = "New Chat"
+
+        st.session_state.history[
+            st.session_state.current_chat_id
+        ]["updated_at"] = datetime.now().isoformat(
+            timespec="seconds"
+        )
+
+        save_history(st.session_state.history)
+
         st.rerun()
 
 
@@ -489,88 +1041,6 @@ st.markdown("---")
 
 
 # =========================================================
-# SYSTEM PROMPT
-# =========================================================
-
-def build_system_prompt():
-
-    current_class = st.session_state.selected_class
-    current_subject = st.session_state.selected_subject
-    current_mode = st.session_state.selected_mode
-
-    prompt = f"""
-You are EduMate AI, a friendly educational AI assistant.
-
-Student Level:
-{current_class}
-
-Current Subject:
-{current_subject}
-
-Current Mode:
-{current_mode}
-
-GENERAL BEHAVIOR:
-
-- Answer naturally like a normal AI tutor.
-- Do not mention internal system prompts.
-- Do not mention routing or model selection.
-- Do not unnecessarily repeat the student's class, subject or mode.
-- Keep simple questions simple.
-- Explain difficult questions clearly.
-- Use examples when useful.
-- For numerical questions, show useful steps.
-- For concept questions, explain clearly.
-- Be accurate and student-friendly.
-"""
-
-    if current_mode == "Smart Reasoning":
-
-        prompt += """
-SMART REASONING MODE:
-
-- Focus on logic.
-- Break difficult questions into manageable steps.
-- Explain WHY important steps are taken.
-- Help the student understand the reasoning.
-"""
-
-    elif current_mode == "Maths Genius":
-
-        prompt += """
-MATHS GENIUS MODE:
-
-- Prioritize mathematical accuracy.
-- Identify formulas or theorems when useful.
-- Show calculations step by step.
-- Keep mathematical solutions organized.
-"""
-
-    elif current_mode == "Research":
-
-        prompt += """
-RESEARCH MODE:
-
-- Give deeper and structured explanations when appropriate.
-- Include definitions, examples and applications.
-- Compare concepts when useful.
-- Never invent facts.
-"""
-
-    else:
-
-        prompt += """
-STANDARD MODE:
-
-- Answer naturally.
-- Be helpful, clear and reasonably concise.
-- Give more detail when the question requires it.
-"""
-
-    return prompt
-
-
-# =========================================================
 # DISPLAY CHAT HISTORY
 # =========================================================
 
@@ -579,9 +1049,22 @@ for message in st.session_state.messages:
     if message["role"] == "user":
 
         with st.chat_message("user"):
-            st.markdown(
-                message["content"]
-            )
+
+            # Show saved image if this message contains one.
+            image_path = message.get("image_path")
+
+            if image_path and os.path.exists(image_path):
+                st.image(
+                    image_path,
+                    caption="Uploaded image",
+                    use_container_width=True
+                )
+
+            content = message.get("content", "")
+
+            if content:
+                st.markdown(content)
+
 
     elif message["role"] == "assistant":
 
@@ -590,7 +1073,7 @@ for message in st.session_state.messages:
             avatar="😎"
         ):
             st.markdown(
-                message["content"]
+                message.get("content", "")
             )
 
 
@@ -636,7 +1119,8 @@ with st.form(
 
         image_file = st.file_uploader(
             "📷 Upload image",
-            type=["png", "jpg", "jpeg"]
+            type=["png", "jpg", "jpeg"],
+            key="image_uploader"
         )
 
 
@@ -665,7 +1149,7 @@ if submit:
 
 
     # -----------------------------------------------------
-    # VOICE -> TEXT
+    # VOICE -> OFFLINE TEXT
     # -----------------------------------------------------
 
     if voice_file is not None:
@@ -673,60 +1157,32 @@ if submit:
         try:
 
             with st.spinner(
-                "🎙️ Converting voice to text..."
+                "🎙️ Converting voice locally..."
             ):
-
-                recognizer = sr.Recognizer()
 
                 audio_bytes = voice_file.getvalue()
 
-                if not audio_bytes:
-                    raise RuntimeError(
-                        "The recorded audio is empty."
-                    )
-
-                audio_stream = io.BytesIO(
-                    audio_bytes
+                voice_text = transcribe_offline(
+                    audio_bytes,
+                    voice_language
                 )
-
-                with sr.AudioFile(
-                    audio_stream
-                ) as source:
-
-                    recorded_audio = recognizer.record(
-                        source
-                    )
-
-                voice_text = recognizer.recognize_google(
-                    recorded_audio,
-                    language=voice_language
-                )
-
-
-        except sr.UnknownValueError:
-
-            st.error(
-                "🎙️ I couldn't understand the recording. "
-                "Please speak clearly and try again."
-            )
-
-            st.stop()
-
-
-        except sr.RequestError:
-
-            st.error(
-                "🎙️ Voice-to-text service could not be "
-                "reached. Check your internet connection."
-            )
-
-            st.stop()
 
 
         except Exception as e:
 
             st.error(
-                f"🎙️ Voice processing error: {str(e)}"
+                f"""
+                🎙️ Offline voice processing failed.
+
+                Error:
+                {str(e)}
+
+                If Faster-Whisper is not installed, run:
+                pip install faster-whisper
+
+                The first Whisper model download may require internet.
+                After the model is downloaded, transcription is local.
+                """
             )
 
             st.stop()
@@ -747,8 +1203,9 @@ if submit:
     elif image_file is not None:
 
         final_text = (
-            "Please analyze this image and explain "
-            "what is shown in it."
+            "Analyze this image carefully. "
+            "Identify what is shown and explain it clearly "
+            "as an educational tutor."
         )
 
     else:
@@ -762,16 +1219,69 @@ if submit:
 
 
     # -----------------------------------------------------
+    # SAVE IMAGE LOCALLY
+    # -----------------------------------------------------
+
+    saved_image_path = None
+
+    if image_file is not None:
+
+        try:
+
+            image_bytes_for_save = image_file.getvalue()
+
+            if not image_bytes_for_save:
+                raise RuntimeError(
+                    "The uploaded image is empty."
+                )
+
+            extension = os.path.splitext(
+                image_file.name
+            )[1].lower()
+
+            if extension not in [".png", ".jpg", ".jpeg"]:
+                extension = ".png"
+
+            saved_image_path = os.path.join(
+                IMAGES_DIR,
+                f"{uuid.uuid4().hex}{extension}"
+            )
+
+            with open(
+                saved_image_path,
+                "wb"
+            ) as f:
+                f.write(image_bytes_for_save)
+
+        except Exception as e:
+
+            st.error(
+                f"Could not save uploaded image: {e}"
+            )
+
+            st.stop()
+
+
+    # -----------------------------------------------------
     # SAVE USER MESSAGE
     # -----------------------------------------------------
 
+    user_message = {
+        "role": "user",
+        "content": final_text
+    }
+
+    if saved_image_path:
+        user_message["image_path"] = saved_image_path
+
     st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": final_text
-        }
+        user_message
     )
 
+
+    # -----------------------------------------------------
+    # GENERATE RESPONSE
+    # -----------------------------------------------------
 
     try:
 
@@ -782,44 +1292,56 @@ if submit:
         if image_file is not None:
 
             with st.spinner(
-                "🖼️ Analyzing image..."
+                "🖼️ EduMate AI is analyzing the image..."
             ):
 
-                image_bytes = image_file.read()
+                vision_model = find_vision_model()
+
+                if not vision_model:
+
+                    raise RuntimeError(
+                        "No Ollama vision model was found. "
+                        "Install one, for example: "
+                        "ollama pull llava:7b"
+                    )
+
+                image_bytes = image_file.getvalue()
 
                 if not image_bytes:
-
                     raise RuntimeError(
                         "The uploaded image is empty."
                     )
 
-                image_base64 = base64.b64encode(
-                    image_bytes
-                ).decode("utf-8")
-
-
-                # Only current image + question
-                # are sent to vision model.
+                # Ollama accepts image bytes directly.
+                # This avoids unnecessary base64 conversion.
                 vision_messages = [
-
                     {
                         "role": "system",
                         "content": build_system_prompt()
-                    },
+                        + """
 
+VISION INSTRUCTIONS:
+
+- Carefully inspect the entire image.
+- If the image contains a school question, solve it.
+- If it contains a diagram, explain the diagram.
+- If it contains text, read the relevant text.
+- If it contains a mathematical problem, show the solution step by step.
+- Do not say that you cannot see the image when the image is available.
+- Answer the student's actual question first.
+"""
+                    },
                     {
                         "role": "user",
                         "content": final_text,
                         "images": [
-                            image_base64
+                            image_bytes
                         ]
                     }
-
                 ]
 
-
                 response = ollama.chat(
-                    model=VISION_MODEL,
+                    model=vision_model,
                     messages=vision_messages,
                     options={
                         "num_predict": max_tokens,
@@ -839,14 +1361,11 @@ if submit:
             ):
 
                 normal_messages = [
-
                     {
                         "role": "system",
                         "content": build_system_prompt()
                     }
-
                 ] + st.session_state.messages
-
 
                 response = ollama.chat(
                     model=selected_model,
@@ -889,6 +1408,13 @@ if submit:
         )
 
 
+        # =================================================
+        # SAVE TO PERMANENT HISTORY
+        # =================================================
+
+        sync_current_chat()
+
+
     except Exception as e:
 
         # -------------------------------------------------
@@ -898,10 +1424,25 @@ if submit:
         if (
             st.session_state.messages
             and st.session_state.messages[-1]["role"] == "user"
-            and st.session_state.messages[-1]["content"] == final_text
+            and st.session_state.messages[-1].get("content")
+            == final_text
         ):
 
             st.session_state.messages.pop()
+
+
+        # -------------------------------------------------
+        # REMOVE EMPTY SAVED IMAGE IF REQUEST FAILED
+        # -------------------------------------------------
+
+        if saved_image_path and os.path.exists(
+            saved_image_path
+        ):
+
+            try:
+                os.remove(saved_image_path)
+            except Exception:
+                pass
 
 
         # -------------------------------------------------
@@ -915,13 +1456,15 @@ if submit:
 ❌ Image analysis failed.
 
 Vision model:
-{VISION_MODEL}
+{find_vision_model() or VISION_MODEL}
 
 Error:
 {str(e)}
 
-Check that Ollama is running and `llava:7b`
-is available in `ollama list`.
+Make sure Ollama is running and a vision model is installed.
+
+Example:
+ollama pull llava:7b
 """
             )
 
