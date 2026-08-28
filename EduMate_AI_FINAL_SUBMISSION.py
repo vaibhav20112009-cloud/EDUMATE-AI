@@ -777,7 +777,13 @@ def add_response_actions(text, language="en-IN"):
 # GEMINI AI BACKEND — CLOUD ONLY
 # =========================================================
 
-GEMINI_MODEL = "gemini-3.7-flash"
+GEMINI_MODELS = [
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+]
+GEMINI_MODEL = GEMINI_MODELS[0]
 
 
 def get_gemini_api_key():
@@ -825,43 +831,71 @@ def gemini_history_text(messages):
 
 
 def gemini_text_response(system_prompt, messages):
-    """Generate a normal text answer through Gemini."""
+    """Generate text with automatic retry/fallback across Gemini models."""
     client = get_gemini_client()
 
     if client is None:
         raise RuntimeError(
-            "Gemini is not available. Check that google-genai is installed "
-            "and GEMINI_API_KEY is present in Streamlit Secrets."
+            "Gemini is not configured. Add GEMINI_API_KEY to "
+            "Streamlit Cloud → Manage app → Settings → Secrets."
         )
 
     history = gemini_history_text(messages)
 
     prompt = (
         system_prompt
-        + "\n\n"
-        + "Here is the conversation so far:\n"
+        + "\n\nHere is the conversation so far:\n"
         + (history or "(No previous conversation.)")
-        + "\n\n"
-        + "Answer the student's latest message. "
+        + "\n\nAnswer the student's latest message. "
         + "Be accurate, educational and clear."
     )
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt
+    errors = []
+
+    for model_name in GEMINI_MODELS:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+
+                text = (response.text or "").strip()
+
+                if text:
+                    return text
+
+                errors.append(f"{model_name}: empty response")
+                break
+
+            except Exception as exc:
+                error_text = str(exc)
+                errors.append(f"{model_name} attempt {attempt + 1}: {error_text}")
+
+                # Retry transient availability/rate-limit/server failures.
+                if any(code in error_text for code in ("503", "429", "500", "502", "504")):
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+
+                # Configuration/auth errors won't be fixed by trying another model.
+                if any(code in error_text for code in ("401", "403", "API key", "PERMISSION_DENIED")):
+                    raise RuntimeError(error_text)
+
+                break
+
+    raise RuntimeError(
+        "All configured Gemini models were temporarily unavailable.\n\n"
+        + "\n".join(errors[-8:])
     )
 
-    return (response.text or "").strip()
-
-
 def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
-    """Generate an image-aware answer through Gemini."""
+    """Generate image-aware answer with automatic Gemini fallback."""
     client = get_gemini_client()
 
     if client is None:
         raise RuntimeError(
-            "Gemini vision is not available. Check google-genai installation "
-            "and GEMINI_API_KEY in Streamlit Secrets."
+            "Gemini is not configured. Add GEMINI_API_KEY to "
+            "Streamlit Cloud → Manage app → Settings → Secrets."
         )
 
     extension = os.path.splitext(image_name or "")[1].lower()
@@ -891,13 +925,41 @@ def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
         + user_text
     )
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[image_part, prompt]
+    errors = []
+
+    for model_name in GEMINI_MODELS:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[image_part, prompt]
+                )
+
+                text = (response.text or "").strip()
+
+                if text:
+                    return text
+
+                errors.append(f"{model_name}: empty response")
+                break
+
+            except Exception as exc:
+                error_text = str(exc)
+                errors.append(f"{model_name} attempt {attempt + 1}: {error_text}")
+
+                if any(code in error_text for code in ("503", "429", "500", "502", "504")):
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+
+                if any(code in error_text for code in ("401", "403", "API key", "PERMISSION_DENIED")):
+                    raise RuntimeError(error_text)
+
+                break
+
+    raise RuntimeError(
+        "All configured Gemini vision models were temporarily unavailable.\n\n"
+        + "\n".join(errors[-8:])
     )
-
-    return (response.text or "").strip()
-
 
 def gemini_available():
     """True when Gemini SDK and API key are available."""
@@ -1722,7 +1784,7 @@ Error:
 Backend:
 Gemini Cloud
 
-Model:
+Primary model:
 {GEMINI_MODEL}
 
 Error:
