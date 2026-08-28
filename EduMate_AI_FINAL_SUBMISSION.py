@@ -1,6 +1,5 @@
 import streamlit as st
 import streamlit.components.v1 as components
-import ollama
 
 # Google Gemini API (used automatically when GEMINI_API_KEY is available)
 try:
@@ -13,7 +12,6 @@ import base64
 import io
 import json
 import os
-import requests
 import uuid
 from datetime import datetime
 
@@ -43,16 +41,7 @@ st.set_page_config(
 # MODELS
 # =========================================================
 
-TEXT_MODELS = [
-    "llama3.2",
-    "mistral",
-    "deepseek-r1:7b",
-    "phi3"
-]
-
-# Your original vision model.
-# If you have another Ollama vision model installed, change this.
-VISION_MODEL = "llava:7b"
+TEXT_MODELS = ["Gemini 3.7 Flash"]
 
 # Local Whisper model.
 # "base" is a reasonable CPU starting point.
@@ -66,55 +55,6 @@ IMAGES_DIR = os.path.join(HISTORY_DIR, "images")
 # =========================================================
 # SAVING HISTORY
 # =========================================================
-
-# 1. Setup paths and data (Keep this outside your loop, at the start of your function)
-HISTORY_FILE = "chat_history.json"
-MODEL_NAME = "llama3"
-OLLAMA_URL = "http://localhost:11434/api/chat"
-
-# Load history if file exists
-chat_history = []
-if os.path.exists(HISTORY_FILE):
-    try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            chat_history = json.load(f)
-    except json.JSONDecodeError:
-        chat_history = []
-
-# Show previous history to the user
-for chat in chat_history:
-    role_label = "User" if chat["role"] == "user" else "AI"
-    print(f"{role_label}: {chat['content']}")
-
-
-# 2. Inside your input logic / button click event
-# Replace 'user_input_variable' with your actual input variable name
-user_input_variable = "Hello, how are you?"
-
-if user_input_variable.strip():
-    # Append user message to history
-    chat_history.append({"role": "user", "content": user_input_variable})
-
-    # Prepare payload and send request
-    payload = {"model": MODEL_NAME, "messages": chat_history, "stream": False}
-
-    try:
-        response = requests.post(OLLAMA_URL, json=payload)
-        ai_reply = response.json()["message"]["content"]
-
-        # Print/Display the AI reply
-        print(f"AI: {ai_reply}")
-
-        # Append AI reply to history and save to file immediately
-        chat_history.append({"role": "assistant", "content": ai_reply})
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(chat_history, f, indent=4, ensure_ascii=False)
-
-    except requests.exceptions.ConnectionError:
-        print("Error: Ollama server is not running.")
-    except Exception as e:
-        print(f"Error: {e}")
-
 
 # =========================================================
 # DIRECTORIES
@@ -834,7 +774,7 @@ def add_response_actions(text, language="en-IN"):
 
 
 # =========================================================
-# HYBRID AI BACKEND — GEMINI CLOUD + OLLAMA OFFLINE
+# GEMINI AI BACKEND — CLOUD ONLY
 # =========================================================
 
 GEMINI_MODEL = "gemini-3.7-flash"
@@ -959,68 +899,9 @@ def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
     return (response.text or "").strip()
 
 
-def cloud_ai_available():
-    """True when the deployed app has a Gemini key."""
+def gemini_available():
+    """True when Gemini SDK and API key are available."""
     return bool(get_gemini_api_key()) and genai is not None
-
-
-# =========================================================
-# OLLAMA HELPERS
-
-
-
-# =========================================================
-
-def get_installed_ollama_models():
-    """Return installed Ollama model names."""
-    try:
-        result = ollama.list()
-        models = result.get("models", [])
-
-        names = []
-
-        for model in models:
-            name = model.get("name")
-
-            if name:
-                names.append(name)
-
-        return names
-
-    except Exception:
-        return []
-
-
-def find_vision_model():
-    """
-    Pick a vision model from the installed Ollama models.
-    Prefer the user's original llava:7b.
-    """
-    installed = get_installed_ollama_models()
-
-    if VISION_MODEL in installed:
-        return VISION_MODEL
-
-    vision_candidates = [
-        "llava:7b",
-        "llava",
-        "llama3.2-vision:11b",
-        "llama3.2-vision:latest",
-        "llama3.2-vision"
-    ]
-
-    for candidate in vision_candidates:
-        if candidate in installed:
-            return candidate
-
-    # Also allow tag variations such as llava:13b.
-    for name in installed:
-        low = name.lower()
-
-        if "llava" in low or "vision" in low:
-            return name
-
-    return None
 
 
 # =========================================================
@@ -1702,6 +1583,13 @@ if submit:
 
     try:
 
+        if not gemini_available():
+            raise RuntimeError(
+                "Gemini is not configured. Add GEMINI_API_KEY to "
+                "Streamlit Cloud → Manage app → Settings → Secrets, "
+                "and make sure google-genai is installed."
+            )
+
         # =================================================
         # IMAGE REQUEST
         # =================================================
@@ -1712,20 +1600,6 @@ if submit:
                 "🖼️ EduMate AI is analyzing the image..."
             ):
 
-                # Gemini handles vision on Streamlit Cloud.
-                # Only the local Ollama path needs an installed vision model.
-                vision_model = None
-
-                if not cloud_ai_available():
-                    vision_model = find_vision_model()
-
-                    if not vision_model:
-                        raise RuntimeError(
-                            "No Ollama vision model was found. "
-                            "Install one, for example: "
-                            "ollama pull llava:7b"
-                        )
-
                 image_bytes = image_file.getvalue()
 
                 if not image_bytes:
@@ -1733,58 +1607,12 @@ if submit:
                         "The uploaded image is empty."
                     )
 
-                # Ollama accepts image bytes directly.
-                # This avoids unnecessary base64 conversion.
-                vision_messages = [
-                    {
-                        "role": "system",
-                        "content": build_system_prompt()
-                        + """
-
-VISION INSTRUCTIONS:
-
-- Carefully inspect the entire image.
-- If the image contains a school question, solve it.
-- If it contains a diagram, explain the diagram.
-- If it contains text, read the relevant text.
-- If it contains a mathematical problem, show the solution step by step.
-- Do not say that you cannot see the image when the image is available.
-- Answer the student's actual question first.
-"""
-                    },
-                    {
-                        "role": "user",
-                        "content": final_text,
-                        "images": [
-                            image_bytes
-                        ]
-                    }
-                ]
-
-                # Cloud deployment: Gemini handles image questions when configured.
-                # Local/offline: existing Ollama vision model remains available.
-                if cloud_ai_available():
-                    ai_response = gemini_image_response(
-                        build_system_prompt(),
-                        final_text,
-                        image_bytes,
-                        image_file.name
-                    )
-                    response = {
-                        "message": {
-                            "content": ai_response or ""
-                        }
-                    }
-                else:
-                    response = ollama.chat(
-                        model=vision_model,
-                        messages=vision_messages,
-                        options={
-                            "num_predict": max_tokens,
-                            "temperature": temperature
-                        }
-                    )
-
+                ai_response = gemini_image_response(
+                    build_system_prompt(),
+                    final_text,
+                    image_bytes,
+                    image_file.name
+                )
 
         # =================================================
         # NORMAL TEXT / VOICE
@@ -1796,52 +1624,20 @@ VISION INSTRUCTIONS:
                 "🤔 EduMate AI is thinking..."
             ):
 
-                normal_messages = [
-                    {
-                        "role": "system",
-                        "content": build_system_prompt()
-                    }
-                ] + st.session_state.messages
-
-                # Cloud deployment: Gemini is used when a key is configured.
-                # Local/offline: Ollama remains the fallback when no key exists.
-                if cloud_ai_available():
-                    ai_response = gemini_text_response(
-                        build_system_prompt(),
-                        st.session_state.messages
-                    )
-                    response = {
-                        "message": {
-                            "content": ai_response or ""
-                        }
-                    }
-                else:
-                    response = ollama.chat(
-                        model=selected_model,
-                        messages=normal_messages,
-                        options={
-                            "num_predict": max_tokens,
-                            "temperature": temperature
-                        }
-                    )
-
+                ai_response = gemini_text_response(
+                    build_system_prompt(),
+                    st.session_state.messages
+                )
 
         # =================================================
-        # EXTRACT RESPONSE
+        # VALIDATE RESPONSE
         # =================================================
 
-        ai_response = (
-            response
-            .get("message", {})
-            .get("content", "")
-            .strip()
-        )
-
+        ai_response = (ai_response or "").strip()
 
         if not ai_response:
-
             raise RuntimeError(
-                "Ollama returned an empty response."
+                "Gemini returned an empty response."
             )
 
 
@@ -1905,7 +1701,7 @@ VISION INSTRUCTIONS:
 ❌ Image analysis failed.
 
 Backend:
-{"Gemini Cloud" if cloud_ai_available() else "Ollama Local"}
+Gemini Cloud
 
 Error:
 {str(e)}
@@ -1924,10 +1720,10 @@ Error:
 ❌ EduMate AI could not generate a response.
 
 Backend:
-{"Gemini Cloud" if cloud_ai_available() else "Ollama Local"}
+Gemini Cloud
 
 Model:
-{GEMINI_MODEL if cloud_ai_available() else selected_model}
+{GEMINI_MODEL}
 
 Error:
 {str(e)}
