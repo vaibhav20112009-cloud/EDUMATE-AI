@@ -778,9 +778,7 @@ def add_response_actions(text, language="en-IN"):
 # =========================================================
 
 GEMINI_MODELS = [
-    "gemini-3.7-flash",
     "gemini-3.6-flash",
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
 ]
 GEMINI_MODEL = GEMINI_MODELS[0]
@@ -831,12 +829,12 @@ def gemini_history_text(messages):
 
 
 def gemini_text_response(system_prompt, messages):
-    """Generate text with automatic retry/fallback across Gemini models."""
+    """Fast Gemini text generation with one short retry/fallback."""
     client = get_gemini_client()
 
     if client is None:
         raise RuntimeError(
-            "Gemini is not configured. Add GEMINI_API_KEY to "
+            "Gemini is not configured. Check GEMINI_API_KEY in "
             "Streamlit Cloud → Manage app → Settings → Secrets."
         )
 
@@ -844,20 +842,29 @@ def gemini_text_response(system_prompt, messages):
 
     prompt = (
         system_prompt
-        + "\n\nHere is the conversation so far:\n"
+        + "\n\nConversation so far:\n"
         + (history or "(No previous conversation.)")
-        + "\n\nAnswer the student's latest message. "
-        + "Be accurate, educational and clear."
+        + "\n\nAnswer the student's latest message clearly and directly."
     )
 
     errors = []
 
-    for model_name in GEMINI_MODELS:
-        for attempt in range(2):
+    for index, model_name in enumerate(GEMINI_MODELS):
+        attempts = 1 if index else 2
+
+        for attempt in range(attempts):
             try:
+                config = genai_types.GenerateContentConfig(
+                    thinking_config=genai_types.ThinkingConfig(
+                        thinking_level="low" if index == 0 else "minimal"
+                    ),
+                    max_output_tokens=1200,
+                )
+
                 response = client.models.generate_content(
                     model=model_name,
-                    contents=prompt
+                    contents=prompt,
+                    config=config,
                 )
 
                 text = (response.text or "").strip()
@@ -870,36 +877,32 @@ def gemini_text_response(system_prompt, messages):
 
             except Exception as exc:
                 error_text = str(exc)
-                errors.append(f"{model_name} attempt {attempt + 1}: {error_text}")
+                errors.append(f"{model_name}: {error_text}")
 
-                # Retry transient availability/rate-limit/server failures.
                 if any(code in error_text for code in ("503", "429", "500", "502", "504")):
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
+                    if attempt + 1 < attempts:
+                        time.sleep(0.8)
+                        continue
+                    break
 
-                # Configuration/auth errors won't be fixed by trying another model.
-                if any(code in error_text for code in ("401", "403", "API key", "PERMISSION_DENIED")):
-                    raise RuntimeError(error_text)
-
-                break
+                raise RuntimeError(error_text)
 
     raise RuntimeError(
-        "All configured Gemini models were temporarily unavailable.\n\n"
-        + "\n".join(errors[-8:])
+        "Gemini is temporarily unavailable. "
+        + " | ".join(errors[-4:])
     )
 
 def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
-    """Generate image-aware answer with automatic Gemini fallback."""
+    """Fast Gemini vision generation with one short retry/fallback."""
     client = get_gemini_client()
 
     if client is None:
         raise RuntimeError(
-            "Gemini is not configured. Add GEMINI_API_KEY to "
+            "Gemini is not configured. Check GEMINI_API_KEY in "
             "Streamlit Cloud → Manage app → Settings → Secrets."
         )
 
     extension = os.path.splitext(image_name or "")[1].lower()
-
     mime_type = {
         ".png": "image/png",
         ".jpg": "image/jpeg",
@@ -914,25 +917,29 @@ def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
 
     prompt = (
         system_prompt
-        + "\n\nVISION INSTRUCTIONS:\n"
-        "- Carefully inspect the entire image.\n"
-        "- If it contains a school question, solve it.\n"
-        "- If it contains a diagram, explain it.\n"
-        "- If it contains text, read the relevant text.\n"
-        "- If it contains mathematics, show the solution step by step.\n"
-        "- Answer the student's actual question first.\n\n"
-        + "Student request: "
-        + user_text
+        + "\n\nInspect the image carefully and answer the student's request. "
+        + "For school questions, solve step by step when useful.\n\n"
+        + "Student request: " + user_text
     )
 
     errors = []
 
-    for model_name in GEMINI_MODELS:
-        for attempt in range(2):
+    for index, model_name in enumerate(GEMINI_MODELS):
+        attempts = 1 if index else 2
+
+        for attempt in range(attempts):
             try:
+                config = genai_types.GenerateContentConfig(
+                    thinking_config=genai_types.ThinkingConfig(
+                        thinking_level="low" if index == 0 else "minimal"
+                    ),
+                    max_output_tokens=1200,
+                )
+
                 response = client.models.generate_content(
                     model=model_name,
-                    contents=[image_part, prompt]
+                    contents=[image_part, prompt],
+                    config=config,
                 )
 
                 text = (response.text or "").strip()
@@ -945,20 +952,19 @@ def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
 
             except Exception as exc:
                 error_text = str(exc)
-                errors.append(f"{model_name} attempt {attempt + 1}: {error_text}")
+                errors.append(f"{model_name}: {error_text}")
 
                 if any(code in error_text for code in ("503", "429", "500", "502", "504")):
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
+                    if attempt + 1 < attempts:
+                        time.sleep(0.8)
+                        continue
+                    break
 
-                if any(code in error_text for code in ("401", "403", "API key", "PERMISSION_DENIED")):
-                    raise RuntimeError(error_text)
-
-                break
+                raise RuntimeError(error_text)
 
     raise RuntimeError(
-        "All configured Gemini vision models were temporarily unavailable.\n\n"
-        + "\n".join(errors[-8:])
+        "Gemini vision is temporarily unavailable. "
+        + " | ".join(errors[-4:])
     )
 
 def gemini_available():
