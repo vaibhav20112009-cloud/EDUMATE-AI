@@ -889,7 +889,10 @@ def gemini_text_response(system_prompt, messages):
     client = get_gemini_client()
 
     if client is None:
-        return None
+        raise RuntimeError(
+            "Gemini is not available. Check that google-genai is installed "
+            "and GEMINI_API_KEY is present in Streamlit Secrets."
+        )
 
     history = gemini_history_text(messages)
 
@@ -916,7 +919,10 @@ def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
     client = get_gemini_client()
 
     if client is None:
-        return None
+        raise RuntimeError(
+            "Gemini vision is not available. Check google-genai installation "
+            "and GEMINI_API_KEY in Streamlit Secrets."
+        )
 
     extension = os.path.splitext(image_name or "")[1].lower()
 
@@ -1706,15 +1712,19 @@ if submit:
                 "🖼️ EduMate AI is analyzing the image..."
             ):
 
-                vision_model = find_vision_model()
+                # Gemini handles vision on Streamlit Cloud.
+                # Only the local Ollama path needs an installed vision model.
+                vision_model = None
 
-                if not vision_model:
+                if not cloud_ai_available():
+                    vision_model = find_vision_model()
 
-                    raise RuntimeError(
-                        "No Ollama vision model was found. "
-                        "Install one, for example: "
-                        "ollama pull llava:7b"
-                    )
+                    if not vision_model:
+                        raise RuntimeError(
+                            "No Ollama vision model was found. "
+                            "Install one, for example: "
+                            "ollama pull llava:7b"
+                        )
 
                 image_bytes = image_file.getvalue()
 
@@ -1894,16 +1904,11 @@ VISION INSTRUCTIONS:
                 f"""
 ❌ Image analysis failed.
 
-Vision model:
-{find_vision_model() or VISION_MODEL}
+Backend:
+{"Gemini Cloud" if cloud_ai_available() else "Ollama Local"}
 
 Error:
 {str(e)}
-
-Make sure Ollama is running and a vision model is installed.
-
-Example:
-ollama pull llava:7b
 """
             )
 
@@ -1918,15 +1923,26 @@ ollama pull llava:7b
                 f"""
 ❌ EduMate AI could not generate a response.
 
+Backend:
+{"Gemini Cloud" if cloud_ai_available() else "Ollama Local"}
+
 Model:
-{selected_model}
+{GEMINI_MODEL if cloud_ai_available() else selected_model}
 
 Error:
 {str(e)}
 """
             )
 
+            # IMPORTANT:
+            # Do not rerun after a failed request. Otherwise Streamlit
+            # clears the error immediately and it looks like the message
+            # simply disappeared.
+            st.stop()
 
+
+    # Rerun only after a successful response so the new message appears
+    # immediately in the chat history.
     st.rerun()
 
 
