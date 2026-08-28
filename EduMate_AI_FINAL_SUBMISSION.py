@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import ollama
 import base64
 import io
@@ -207,8 +208,46 @@ div.stButton > button:hover {
    SIDEBAR
    ===================================================== */
 
+/* =====================================================
+   COLLAPSIBLE SIDEBAR -> FULL MAIN AREA
+   ===================================================== */
+
+/* Do not force a minimum width while the native Streamlit
+   sidebar is collapsed. */
 section[data-testid="stSidebar"] {
-    min-width: 280px;
+    width: 280px;
+}
+
+/* Keep the expanded sidebar at the same width. */
+section[data-testid="stSidebar"][aria-expanded="true"] {
+    width: 280px !important;
+    min-width: 280px !important;
+}
+
+/* IMPORTANT:
+   Do not set width/min-width to 0 here. Streamlit's own
+   collapse mechanism will remove the sidebar from the
+   layout and automatically give the main page the space. */
+
+/* Let the main app use all available width. */
+[data-testid="stAppViewContainer"] > .main {
+    width: 100%;
+    max-width: none !important;
+}
+
+.main .block-container {
+    max-width: none !important;
+    width: 100% !important;
+    padding-left: 3rem;
+    padding-right: 3rem;
+}
+
+/* On smaller screens, use tighter padding. */
+@media (max-width: 900px) {
+    .main .block-container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
 }
 
 .sidebar-heading {
@@ -237,6 +276,10 @@ section[data-testid="stSidebar"] div[data-testid="stSelectbox"] {
 
 [data-testid="stChatMessage"] {
     margin-bottom: 8px;
+}
+
+.response-actions {
+    margin-top: 4px;
 }
 
 .history-card {
@@ -283,6 +326,8 @@ if "history_loaded" not in st.session_state:
     st.session_state.history_loaded = False
 
 
+
+
 # =========================================================
 # OPTIONS
 # =========================================================
@@ -321,6 +366,11 @@ subject_options = [
 voice_languages = {
     "English (India)": "en",
     "Hindi (India)": "hi"
+}
+
+tts_languages = {
+    "English (India)": "en-IN",
+    "Hindi (India)": "hi-IN"
 }
 
 mode_descriptions = {
@@ -564,7 +614,221 @@ def transcribe_offline(audio_bytes, language):
 
 
 # =========================================================
+# TEXT-TO-SPEECH (TTS)
+# =========================================================
+
+def add_response_actions(text, language="en-IN"):
+    """
+    Visible Copy + Listen + Stop controls for this exact AI response.
+    Browser Web Speech API is used for TTS.
+    """
+    if not text or not text.strip():
+        return
+
+    import json as _json
+
+    js_text = _json.dumps(text.strip(), ensure_ascii=False)
+    js_lang = _json.dumps(language)
+
+    # The component itself is deliberately tall and has a visible
+    # border so the controls cannot disappear into the chat layout.
+    component_html = f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            * {{
+                box-sizing: border-box;
+            }}
+            html, body {{
+                margin: 0;
+                padding: 0;
+                width: 100%;
+                height: 100%;
+                background: transparent;
+                overflow: hidden;
+                font-family: Arial, sans-serif;
+            }}
+            .tts-box {{
+                width: 100%;
+                min-height: 54px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 6px 0;
+            }}
+            .label {{
+                color: #aeb7c5;
+                font-size: 12px;
+                font-weight: 700;
+                margin-right: 2px;
+                white-space: nowrap;
+            }}
+            button {{
+                border: 1px solid rgba(120,160,255,.45);
+                border-radius: 9px;
+                background: #172033;
+                color: #ffffff;
+                padding: 8px 13px;
+                cursor: pointer;
+                font-size: 13px;
+                font-weight: 700;
+                white-space: nowrap;
+            }}
+            button:hover {{
+                background: #22304a;
+                border-color: rgba(120,160,255,.85);
+            }}
+            button:active {{
+                transform: translateY(1px);
+            }}
+            #status {{
+                color: #aeb7c5;
+                font-size: 12px;
+                margin-left: 2px;
+                white-space: nowrap;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="tts-box">
+            <span class="label">🔊 TTS</span>
+            <button id="copyBtn">📋 Copy</button>
+            <button id="listenBtn">🔊 Listen</button>
+            <button id="stopBtn">⏹ Stop</button>
+            <span id="status"></span>
+        </div>
+
+        <script>
+            const responseText = {js_text};
+            const targetLanguage = {js_lang};
+            const status = document.getElementById("status");
+
+            function setStatus(message, ms) {{
+                status.textContent = message;
+                if (ms) {{
+                    setTimeout(() => {{
+                        status.textContent = "";
+                    }}, ms);
+                }}
+            }}
+
+            async function copyText() {{
+                try {{
+                    if (navigator.clipboard && window.isSecureContext) {{
+                        await navigator.clipboard.writeText(responseText);
+                    }} else {{
+                        const ta = document.createElement("textarea");
+                        ta.value = responseText;
+                        ta.style.position = "fixed";
+                        ta.style.left = "-10000px";
+                        document.body.appendChild(ta);
+                        ta.focus();
+                        ta.select();
+                        document.execCommand("copy");
+                        ta.remove();
+                    }}
+                    setStatus("✅ Copied", 1500);
+                }} catch (e) {{
+                    setStatus("❌ Copy blocked", 1800);
+                }}
+            }}
+
+            function chooseVoice(lang) {{
+                if (!("speechSynthesis" in window)) return null;
+
+                const voices = window.speechSynthesis.getVoices();
+                if (!voices || !voices.length) return null;
+
+                const wanted = String(lang || "").toLowerCase();
+                const shortWanted = wanted.split("-")[0];
+
+                return (
+                    voices.find(v => String(v.lang || "").toLowerCase() === wanted) ||
+                    voices.find(v => String(v.lang || "").toLowerCase().startsWith(shortWanted)) ||
+                    voices[0]
+                );
+            }}
+
+            function speakNow() {{
+                if (!("speechSynthesis" in window) ||
+                    typeof SpeechSynthesisUtterance === "undefined") {{
+                    setStatus("❌ TTS unsupported", 2200);
+                    return;
+                }}
+
+                window.speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(responseText);
+                utterance.lang = targetLanguage;
+                utterance.rate = 0.95;
+                utterance.pitch = 1.0;
+                utterance.volume = 1.0;
+
+                const voice = chooseVoice(targetLanguage);
+                if (voice) utterance.voice = voice;
+
+                utterance.onstart = function() {{
+                    setStatus("🔊 Speaking...");
+                }};
+
+                utterance.onend = function() {{
+                    setStatus("✅ Finished", 1500);
+                }};
+
+                utterance.onerror = function(event) {{
+                    if (event && event.error === "canceled") return;
+                    setStatus("❌ Voice error", 2200);
+                }};
+
+                window.speechSynthesis.speak(utterance);
+            }}
+
+            function listenNow() {{
+                if (!("speechSynthesis" in window)) {{
+                    setStatus("❌ TTS unsupported", 2200);
+                    return;
+                }}
+
+                const voices = window.speechSynthesis.getVoices();
+
+                // Chrome can populate voices asynchronously.
+                if (voices && voices.length) {{
+                    speakNow();
+                    return;
+                }}
+
+                const oldHandler = window.speechSynthesis.onvoiceschanged;
+                window.speechSynthesis.onvoiceschanged = function() {{
+                    window.speechSynthesis.onvoiceschanged = oldHandler || null;
+                    speakNow();
+                }};
+
+                setTimeout(speakNow, 250);
+            }}
+
+            function stopNow() {{
+                if ("speechSynthesis" in window) {{
+                    window.speechSynthesis.cancel();
+                    setStatus("⏹ Stopped", 1300);
+                }}
+            }}
+
+            document.getElementById("copyBtn").onclick = copyText;
+            document.getElementById("listenBtn").onclick = listenNow;
+            document.getElementById("stopBtn").onclick = stopNow;
+        </script>
+    </body>
+    </html>
+    """
+
+    components.html(component_html, height=62, scrolling=False)
+
+
+# =========================================================
 # OLLAMA HELPERS
+
+
 # =========================================================
 
 def get_installed_ollama_models():
@@ -773,6 +1037,8 @@ with st.sidebar:
 
     st.subheader("🎙️ Voice")
 
+    st.caption("🌐 Voice message requires internet.")
+
     voice_language_name = st.selectbox(
         "Voice language",
         list(voice_languages.keys()),
@@ -786,7 +1052,7 @@ with st.sidebar:
 
     if FASTER_WHISPER_AVAILABLE:
         st.caption(
-            "🎙️ Offline voice-to-text enabled. "
+            "🎙️ Offline voice message enabled. "
             "First Whisper model download may require internet."
         )
     else:
@@ -1072,8 +1338,19 @@ for message in st.session_state.messages:
             "assistant",
             avatar="😎"
         ):
-            st.markdown(
-                message.get("content", "")
+            assistant_text = message.get("content", "")
+            st.markdown(assistant_text)
+
+            # Buttons are attached to THIS exact response.
+            add_response_actions(
+                assistant_text,
+                tts_languages.get(
+                    st.session_state.get(
+                        "voice_language_selector",
+                        "English (India)"
+                    ),
+                    "en-IN"
+                )
             )
 
 
