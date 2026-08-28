@@ -1,6 +1,14 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import ollama
+
+# Google Gemini API (used automatically when GEMINI_API_KEY is available)
+try:
+    from google import genai
+    from google.genai import types as genai_types
+except ImportError:
+    genai = None
+    genai_types = None
 import base64
 import io
 import json
@@ -826,7 +834,133 @@ def add_response_actions(text, language="en-IN"):
 
 
 # =========================================================
+# HYBRID AI BACKEND — GEMINI CLOUD + OLLAMA OFFLINE
+# =========================================================
+
+GEMINI_MODEL = "gemini-3.7-flash"
+
+
+def get_gemini_api_key():
+    """Read Gemini API key from Streamlit Secrets or environment."""
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+
+    if key:
+        return key
+
+    try:
+        key = str(st.secrets.get("GEMINI_API_KEY", "")).strip()
+    except Exception:
+        key = ""
+
+    return key
+
+
+def get_gemini_client():
+    """Return a Gemini client when a key and SDK are available."""
+    api_key = get_gemini_api_key()
+
+    if not api_key or genai is None:
+        return None
+
+    return genai.Client(api_key=api_key)
+
+
+def gemini_history_text(messages):
+    """Convert the existing EduMate chat history into Gemini context."""
+    parts = []
+
+    for message in messages:
+        role = message.get("role", "")
+        content = str(message.get("content", "")).strip()
+
+        if not content:
+            continue
+
+        if role == "user":
+            parts.append("Student: " + content)
+        elif role == "assistant":
+            parts.append("EduMate AI: " + content)
+
+    return "\n\n".join(parts)
+
+
+def gemini_text_response(system_prompt, messages):
+    """Generate a normal text answer through Gemini."""
+    client = get_gemini_client()
+
+    if client is None:
+        return None
+
+    history = gemini_history_text(messages)
+
+    prompt = (
+        system_prompt
+        + "\n\n"
+        + "Here is the conversation so far:\n"
+        + (history or "(No previous conversation.)")
+        + "\n\n"
+        + "Answer the student's latest message. "
+        + "Be accurate, educational and clear."
+    )
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt
+    )
+
+    return (response.text or "").strip()
+
+
+def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
+    """Generate an image-aware answer through Gemini."""
+    client = get_gemini_client()
+
+    if client is None:
+        return None
+
+    extension = os.path.splitext(image_name or "")[1].lower()
+
+    mime_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }.get(extension, "image/png")
+
+    image_part = genai_types.Part.from_bytes(
+        data=image_bytes,
+        mime_type=mime_type
+    )
+
+    prompt = (
+        system_prompt
+        + "\n\nVISION INSTRUCTIONS:\n"
+        "- Carefully inspect the entire image.\n"
+        "- If it contains a school question, solve it.\n"
+        "- If it contains a diagram, explain it.\n"
+        "- If it contains text, read the relevant text.\n"
+        "- If it contains mathematics, show the solution step by step.\n"
+        "- Answer the student's actual question first.\n\n"
+        + "Student request: "
+        + user_text
+    )
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[image_part, prompt]
+    )
+
+    return (response.text or "").strip()
+
+
+def cloud_ai_available():
+    """True when the deployed app has a Gemini key."""
+    return bool(get_gemini_api_key()) and genai is not None
+
+
+# =========================================================
 # OLLAMA HELPERS
+
 
 
 # =========================================================
@@ -1052,7 +1186,7 @@ with st.sidebar:
 
     if FASTER_WHISPER_AVAILABLE:
         st.caption(
-            "🎙️ Offline voice message enabled. "
+            "🎙️ Offline voice-to-text enabled. "
             "First Whisper model download may require internet."
         )
     else:
@@ -1617,14 +1751,29 @@ VISION INSTRUCTIONS:
                     }
                 ]
 
-                response = ollama.chat(
-                    model=vision_model,
-                    messages=vision_messages,
-                    options={
-                        "num_predict": max_tokens,
-                        "temperature": temperature
+                # Cloud deployment: Gemini handles image questions when configured.
+                # Local/offline: existing Ollama vision model remains available.
+                if cloud_ai_available():
+                    ai_response = gemini_image_response(
+                        build_system_prompt(),
+                        final_text,
+                        image_bytes,
+                        image_file.name
+                    )
+                    response = {
+                        "message": {
+                            "content": ai_response or ""
+                        }
                     }
-                )
+                else:
+                    response = ollama.chat(
+                        model=vision_model,
+                        messages=vision_messages,
+                        options={
+                            "num_predict": max_tokens,
+                            "temperature": temperature
+                        }
+                    )
 
 
         # =================================================
@@ -1644,14 +1793,27 @@ VISION INSTRUCTIONS:
                     }
                 ] + st.session_state.messages
 
-                response = ollama.chat(
-                    model=selected_model,
-                    messages=normal_messages,
-                    options={
-                        "num_predict": max_tokens,
-                        "temperature": temperature
+                # Cloud deployment: Gemini is used when a key is configured.
+                # Local/offline: Ollama remains the fallback when no key exists.
+                if cloud_ai_available():
+                    ai_response = gemini_text_response(
+                        build_system_prompt(),
+                        st.session_state.messages
+                    )
+                    response = {
+                        "message": {
+                            "content": ai_response or ""
+                        }
                     }
-                )
+                else:
+                    response = ollama.chat(
+                        model=selected_model,
+                        messages=normal_messages,
+                        options={
+                            "num_predict": max_tokens,
+                            "temperature": temperature
+                        }
+                    )
 
 
         # =================================================
