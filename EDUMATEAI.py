@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
+import re
 # Google Gemini API (used automatically when GEMINI_API_KEY is available)
 try:
     from google import genai
