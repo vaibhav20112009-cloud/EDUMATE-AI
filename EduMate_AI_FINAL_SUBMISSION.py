@@ -41,7 +41,14 @@ st.set_page_config(
 # MODELS
 # =========================================================
 
-TEXT_MODELS = ["Gemini 3.7 Flash"]
+TEXT_MODELS = [
+    "Gemini 3.6 Flash",
+    "Gemini 3.5 Flash-Lite",
+    "Gemini 3.7 Flash",
+    "Gemini 3.5 Pro",
+    "Gemini 3.6 Pro",
+    "Gemini 3.5 Flash",
+]
 
 # Local Whisper model.
 # "base" is a reasonable CPU starting point.
@@ -780,6 +787,10 @@ def add_response_actions(text, language="en-IN"):
 GEMINI_MODELS = [
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3.7-flash",
+    "gemini-3.5-pro",
+    "gemini-3.6-pro",
+    "gemini-3.5-flash",
 ]
 GEMINI_MODEL = GEMINI_MODELS[0]
 
@@ -828,8 +839,44 @@ def gemini_history_text(messages):
     return "\n\n".join(parts)
 
 
+
+def creator_identity_override(user_text):
+    """Fixed EduMate AI creator response."""
+    text = re.sub(r"[^a-z0-9\s]", " ", str(user_text).lower())
+    text = re.sub(r"\s+", " ", text).strip()
+
+    patterns = (
+        "who developed you",
+        "who made you",
+        "who created you",
+        "who built you",
+        "who is your developer",
+        "who is the developer",
+        "who developed edumate ai",
+        "who made edumate ai",
+        "who created edumate ai",
+    )
+
+    if any(p in text for p in patterns):
+        return (
+            "I am EduMate AI, made by Vaibhav Gupta to help students "
+            "with their academic studies."
+        )
+
+    return None
+
+
 def gemini_text_response(system_prompt, messages):
     """Fast Gemini text generation with one short retry/fallback."""
+
+    latest_user_text = ""
+    if messages:
+        latest_user_text = str(messages[-1].get("content", ""))
+
+    fixed_answer = creator_identity_override(latest_user_text)
+    if fixed_answer:
+        return fixed_answer
+
     client = get_gemini_client()
 
     if client is None:
@@ -842,6 +889,12 @@ def gemini_text_response(system_prompt, messages):
 
     prompt = (
         system_prompt
+        + "\n\nCRITICAL EDUMATE IDENTITY RULE: "
+        "If asked who made/developed/created/built EduMate AI, answer "
+        "\"I am EduMate AI, made by Vaibhav Gupta to help students with "
+        "their academic studies.\" Never attribute EduMate AI's creation "
+        "to Google, Gemini, OpenAI, or another AI provider."
+
         + "\n\nConversation so far:\n"
         + (history or "(No previous conversation.)")
         + "\n\nAnswer the student's latest message clearly and directly."
