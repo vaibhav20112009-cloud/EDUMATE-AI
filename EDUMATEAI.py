@@ -428,30 +428,39 @@ def ensure_current_chat():
 
 
 def sync_current_chat():
-    """Copy current messages into persistent history."""
+    """Copy current messages into persistent history without overwriting custom names."""
     ensure_current_chat()
 
     chat_id = st.session_state.current_chat_id
-
     chat = st.session_state.history[chat_id]
-    chat["messages"] = st.session_state.messages
-    chat["title"] = make_chat_title(st.session_state.messages)
-    chat["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
+    chat["messages"] = st.session_state.messages
+
+    # Only auto-generate a title while the chat still has the default name.
+    # Once the user renames it, the custom name is permanent.
+    if not chat.get("custom_title", False) and chat.get("title", "New Chat") == "New Chat":
+        generated_title = make_chat_title(st.session_state.messages)
+        if generated_title != "New Chat":
+            chat["title"] = generated_title
+
+    chat["updated_at"] = datetime.now().isoformat(timespec="seconds")
     save_history(st.session_state.history)
 
 
 def rename_chat(chat_id, new_title):
-    """Rename a saved chat."""
+    """Rename a saved chat and permanently preserve its custom title."""
     if chat_id not in st.session_state.history:
         return
 
-    title = re.sub(r"\\s+", " ", str(new_title).strip())
+    title = re.sub(r"\s+", " ", str(new_title).strip())
     if not title:
         title = "New Chat"
 
-    st.session_state.history[chat_id]["title"] = title[:60]
-    st.session_state.history[chat_id]["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    chat = st.session_state.history[chat_id]
+    chat["title"] = title[:60]
+    chat["custom_title"] = True
+    chat["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
     save_history(st.session_state.history)
 
 
