@@ -829,8 +829,9 @@ def get_gemini_api_key():
     return key
 
 
+@st.cache_resource(show_spinner=False)
 def get_gemini_client():
-    """Return a Gemini client when a key and SDK are available."""
+    """Create the Gemini client once and reuse it across Streamlit reruns."""
     api_key = get_gemini_api_key()
 
     if not api_key or genai is None:
@@ -885,6 +886,26 @@ def creator_identity_override(user_text):
     return None
 
 
+def instant_simple_response(user_text):
+    """Answer trivial conversational messages locally for near-instant UI."""
+    text = re.sub(r"[^a-z0-9\s]", " ", str(user_text).lower())
+    text = re.sub(r"\s+", " ", text).strip()
+
+    if text in {"hello", "hi", "hey", "hii", "helo", "hello there"}:
+        return "Hello! 👋 How can I help you today?"
+
+    if text in {"good morning", "good afternoon", "good evening"}:
+        return "Hello! 👋 How can I help you today?"
+
+    if text in {"thanks", "thank you", "thx", "thankyou"}:
+        return "You're welcome! 😊"
+
+    if text in {"bye", "goodbye", "see you"}:
+        return "Bye! 👋 Good luck with your studies!"
+
+    return None
+
+
 def gemini_text_response(system_prompt, messages):
     """Fast Gemini text generation with one short retry/fallback."""
 
@@ -898,6 +919,10 @@ def gemini_text_response(system_prompt, messages):
     if fixed_answer:
         return fixed_answer
 
+    instant_answer = instant_simple_response(latest_user_text)
+    if instant_answer:
+        return instant_answer
+
     client = get_gemini_client()
 
     if client is None:
@@ -906,11 +931,13 @@ def gemini_text_response(system_prompt, messages):
             "Streamlit Cloud → Manage app → Settings → Secrets."
         )
 
-    history = gemini_history_text(messages)
+    # Keep only recent turns to reduce request size and latency.
+    recent_messages = (messages or [])[-8:]
+    history = gemini_history_text(recent_messages)
 
     prompt = (
         system_prompt
-        + "\n\nConversation so far:\n"
+        + "\n\nRecent conversation:\n"
         + (history or "(No previous conversation.)")
         + "\n\nAnswer the student's latest message clearly and directly."
     )
@@ -922,12 +949,29 @@ def gemini_text_response(system_prompt, messages):
 
         for attempt in range(attempts):
             try:
-                config = genai_types.GenerateContentConfig(
-                    thinking_config=genai_types.ThinkingConfig(
-                        thinking_level="low" if index == 0 else "minimal"
-                    ),
-                    max_output_tokens=1200,
-                )
+                # Gemini 3.6 Flash supports "minimal" thinking.
+                # This is the lowest-latency setting for normal chat.
+                if model_name in {
+                    "gemini-3.6-flash",
+                    "gemini-3.5-flash-lite",
+                    "gemini-3.7-flash",
+                    "gemini-3.5-flash",
+                    "gemini-3.1-flash-lite",
+                }:
+                    config = genai_types.GenerateContentConfig(
+                        thinking_config=genai_types.ThinkingConfig(
+                            thinking_level="minimal"
+                        ),
+                        max_output_tokens=900,
+                    )
+                else:
+                    # Gemini 2.5 Flash uses the older thinking-budget API.
+                    config = genai_types.GenerateContentConfig(
+                        thinking_config=genai_types.ThinkingConfig(
+                            thinking_budget=0
+                        ),
+                        max_output_tokens=900,
+                    )
 
                 response = client.models.generate_content(
                     model=model_name,
@@ -997,12 +1041,26 @@ def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
 
         for attempt in range(attempts):
             try:
-                config = genai_types.GenerateContentConfig(
-                    thinking_config=genai_types.ThinkingConfig(
-                        thinking_level="low" if index == 0 else "minimal"
-                    ),
-                    max_output_tokens=1200,
-                )
+                if model_name in {
+                    "gemini-3.6-flash",
+                    "gemini-3.5-flash-lite",
+                    "gemini-3.7-flash",
+                    "gemini-3.5-flash",
+                    "gemini-3.1-flash-lite",
+                }:
+                    config = genai_types.GenerateContentConfig(
+                        thinking_config=genai_types.ThinkingConfig(
+                            thinking_level="minimal"
+                        ),
+                        max_output_tokens=1200,
+                    )
+                else:
+                    config = genai_types.GenerateContentConfig(
+                        thinking_config=genai_types.ThinkingConfig(
+                            thinking_budget=0
+                        ),
+                        max_output_tokens=1200,
+                    )
 
                 response = client.models.generate_content(
                     model=model_name,
