@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
+import time
 import re
 # Google Gemini API (used automatically when GEMINI_API_KEY is available)
 try:
@@ -42,14 +43,7 @@ st.set_page_config(
 # MODELS
 # =========================================================
 
-TEXT_MODELS = [
-    "Gemini 3.6 Flash",
-    "Gemini 3.5 Flash-Lite",
-    "Gemini 3.7 Flash",
-    "Gemini 3.5 Pro",
-    "Gemini 3.6 Pro",
-    "Gemini 3.5 Flash",
-]
+TEXT_MODELS = ["Gemini 3.7 Flash"]
 
 # Local Whisper model.
 # "base" is a reasonable CPU starting point.
@@ -281,6 +275,9 @@ if "history" not in st.session_state:
 if "history_loaded" not in st.session_state:
     st.session_state.history_loaded = False
 
+if "history_menu" not in st.session_state:
+    st.session_state.history_menu = None
+
 
 
 
@@ -434,6 +431,20 @@ def sync_current_chat():
     chat["title"] = make_chat_title(st.session_state.messages)
     chat["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
+    save_history(st.session_state.history)
+
+
+def rename_chat(chat_id, new_title):
+    """Rename a saved chat."""
+    if chat_id not in st.session_state.history:
+        return
+
+    title = re.sub(r"\\s+", " ", str(new_title).strip())
+    if not title:
+        title = "New Chat"
+
+    st.session_state.history[chat_id]["title"] = title[:60]
+    st.session_state.history[chat_id]["updated_at"] = datetime.now().isoformat(timespec="seconds")
     save_history(st.session_state.history)
 
 
@@ -788,10 +799,6 @@ def add_response_actions(text, language="en-IN"):
 GEMINI_MODELS = [
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
-    "gemini-3.7-flash",
-    "gemini-3.5-pro",
-    "gemini-3.6-pro",
-    "gemini-3.5-flash",
 ]
 GEMINI_MODEL = GEMINI_MODELS[0]
 
@@ -840,44 +847,8 @@ def gemini_history_text(messages):
     return "\n\n".join(parts)
 
 
-
-def creator_identity_override(user_text):
-    """Fixed EduMate AI creator response."""
-    text = re.sub(r"[^a-z0-9\s]", " ", str(user_text).lower())
-    text = re.sub(r"\s+", " ", text).strip()
-
-    patterns = (
-        "who developed you",
-        "who made you",
-        "who created you",
-        "who built you",
-        "who is your developer",
-        "who is the developer",
-        "who developed edumate ai",
-        "who made edumate ai",
-        "who created edumate ai",
-    )
-
-    if any(p in text for p in patterns):
-        return (
-            "I am EduMate AI, made by Vaibhav Gupta to help students "
-            "with their academic studies."
-        )
-
-    return None
-
-
 def gemini_text_response(system_prompt, messages):
     """Fast Gemini text generation with one short retry/fallback."""
-
-    latest_user_text = ""
-    if messages:
-        latest_user_text = str(messages[-1].get("content", ""))
-
-    fixed_answer = creator_identity_override(latest_user_text)
-    if fixed_answer:
-        return fixed_answer
-
     client = get_gemini_client()
 
     if client is None:
@@ -890,12 +861,6 @@ def gemini_text_response(system_prompt, messages):
 
     prompt = (
         system_prompt
-        + "\n\nCRITICAL EDUMATE IDENTITY RULE: "
-        "If asked who made/developed/created/built EduMate AI, answer "
-        "\"I am EduMate AI, made by Vaibhav Gupta to help students with "
-        "their academic studies.\" Never attribute EduMate AI's creation "
-        "to Google, Gemini, OpenAI, or another AI provider."
-
         + "\n\nConversation so far:\n"
         + (history or "(No previous conversation.)")
         + "\n\nAnswer the student's latest message clearly and directly."
@@ -1232,16 +1197,16 @@ with st.sidebar:
 
 
     # =====================================================
-    # CHAT HISTORY
+    # CHAT HISTORY — ChatGPT-style
     # =====================================================
 
     st.markdown("---")
-
     st.subheader("💾 Chat History")
 
     if st.button(
         "➕ New Chat",
-        use_container_width=True
+        use_container_width=True,
+        key="new_chat_history"
     ):
         create_chat()
         st.rerun()
@@ -1257,39 +1222,78 @@ with st.sidebar:
         for chat in sorted_history:
 
             chat_id = chat.get("id")
-            title = chat.get("title", "New Chat")
-
-            if not title.strip():
-                title = "New Chat"
+            title = chat.get("title", "New Chat").strip() or "New Chat"
 
             is_current = (
                 chat_id == st.session_state.current_chat_id
             )
 
-            button_text = (
-                f"🟢 {title}"
-                if is_current
-                else f"💬 {title}"
-            )
+            # One compact row: title on the left, ⋯ on the right.
+            row1, row2 = st.columns([0.84, 0.16], gap="small")
 
-            if st.button(
-                button_text,
-                key=f"load_{chat_id}",
-                use_container_width=True
-            ):
-                load_chat(chat_id)
-                st.rerun()
-
-            if is_current:
+            with row1:
+                button_text = (
+                    f"🟢 {title}"
+                    if is_current
+                    else f"💬 {title}"
+                )
 
                 if st.button(
-                    "🗑️ Delete This Chat",
-                    key=f"delete_{chat_id}",
-                    use_container_width=True
+                    button_text,
+                    key=f"load_{chat_id}",
+                    use_container_width=True,
+                    help=title
                 ):
-                    delete_chat(chat_id)
+                    load_chat(chat_id)
+                    st.session_state.history_menu = None
                     st.rerun()
 
+            with row2:
+                if st.button(
+                    "⋯",
+                    key=f"menu_{chat_id}",
+                    help="Rename or delete chat"
+                ):
+                    if st.session_state.get("history_menu") == chat_id:
+                        st.session_state.history_menu = None
+                    else:
+                        st.session_state.history_menu = chat_id
+
+            # The ⋯ menu opens only for that chat.
+            if st.session_state.get("history_menu") == chat_id:
+
+                st.caption("Chat options")
+
+                rename_value = st.text_input(
+                    "Rename chat",
+                    value=title,
+                    max_chars=60,
+                    key=f"rename_value_{chat_id}",
+                    label_visibility="collapsed",
+                    placeholder="Chat name"
+                )
+
+                opt1, opt2 = st.columns(2, gap="small")
+
+                with opt1:
+                    if st.button(
+                        "✏️ Rename",
+                        key=f"rename_{chat_id}",
+                        use_container_width=True
+                    ):
+                        rename_chat(chat_id, rename_value)
+                        st.session_state.history_menu = None
+                        st.rerun()
+
+                with opt2:
+                    if st.button(
+                        "🗑️ Delete",
+                        key=f"delete_{chat_id}",
+                        use_container_width=True
+                    ):
+                        delete_chat(chat_id)
+                        st.session_state.history_menu = None
+                        st.rerun()
 
     # =====================================================
     # CLEAR CURRENT CHAT
