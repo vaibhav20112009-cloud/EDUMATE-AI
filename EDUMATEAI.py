@@ -43,7 +43,14 @@ st.set_page_config(
 # MODELS
 # =========================================================
 
-TEXT_MODELS = ["Gemini 3.7 Flash"]
+TEXT_MODELS = [
+    "Gemini 3.6 Flash",
+    "Gemini 3.5 Flash-Lite",
+    "Gemini 3.7 Flash",
+    "Gemini 3.5 Flash",
+    "Gemini 3.1 Flash-Lite",
+    "Gemini 2.5 Flash",
+]
 
 # Local Whisper model.
 # "base" is a reasonable CPU starting point.
@@ -799,6 +806,10 @@ def add_response_actions(text, language="en-IN"):
 GEMINI_MODELS = [
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
 ]
 GEMINI_MODEL = GEMINI_MODELS[0]
 
@@ -847,8 +858,46 @@ def gemini_history_text(messages):
     return "\n\n".join(parts)
 
 
+
+def creator_identity_override(user_text):
+    """Deterministic creator answer; Gemini is not asked for this."""
+    text = re.sub(r"[^a-z0-9\s]", " ", str(user_text).lower())
+    text = re.sub(r"\s+", " ", text).strip()
+
+    patterns = (
+        "who made you",
+        "who created you",
+        "who developed you",
+        "who built you",
+        "who is your creator",
+        "who is your developer",
+        "who made edumate ai",
+        "who created edumate ai",
+        "who developed edumate ai",
+    )
+
+    if any(pattern in text for pattern in patterns):
+        return (
+            "I am EduMate AI, made by Vaibhav Gupta to help students "
+            "with their academic studies."
+        )
+
+    return None
+
+
 def gemini_text_response(system_prompt, messages):
     """Fast Gemini text generation with one short retry/fallback."""
+
+    latest_user_text = ""
+    for message in reversed(messages or []):
+        if message.get("role") == "user":
+            latest_user_text = str(message.get("content", ""))
+            break
+
+    fixed_answer = creator_identity_override(latest_user_text)
+    if fixed_answer:
+        return fixed_answer
+
     client = get_gemini_client()
 
     if client is None:
