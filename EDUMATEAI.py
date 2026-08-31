@@ -1,3 +1,4 @@
+from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -30,6 +31,27 @@ except Exception:
 # =========================================================
 # PAGE CONFIG
 # =========================================================
+
+
+# ---- Persistent chat history ----
+HISTORY_FILE = Path("edumate_chat_history.json")
+
+def load_persistent_history():
+    try:
+        if HISTORY_FILE.exists():
+            with HISTORY_FILE.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+def save_persistent_history(history):
+    try:
+        with HISTORY_FILE.open("w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 st.set_page_config(
     page_title="EduMate AI Ultra Pro",
@@ -915,6 +937,23 @@ def instant_simple_response(user_text):
     return None
 
 
+
+def format_answer_with_takeaways(answer):
+    """Add a compact Key Takeaways section to a successful AI answer."""
+    answer = str(answer).strip()
+    if not answer:
+        return answer
+
+    # Don't duplicate the section if a model already supplied it.
+    lower = answer.lower()
+    if "key takeaways" in lower or "key takeaways:" in lower:
+        return answer
+
+    return answer + "\n\n### 🔑 Key Takeaways\n" + \
+        "• Review the main concept explained above.\n" + \
+        "• Remember the important facts, formulas, or steps from the answer.\n" + \
+        "• Use the explanation above to solve similar questions."
+
 def gemini_text_response(system_prompt, messages):
     """Fast Gemini text generation with one short retry/fallback."""
 
@@ -949,6 +988,10 @@ def gemini_text_response(system_prompt, messages):
         + "\n\nRecent conversation:\n"
         + (history or "(No previous conversation.)")
         + "\n\nAnswer the student's latest message clearly and directly."
+        + "\nAfter the answer, add a short section titled '### 🔑 Key Takeaways'."
+        + "\nGive 2-4 concise bullet points containing the most important facts,"
+          " formulas, steps, or conclusions from YOUR answer."
+        + "\nDo not add takeaways for greetings or casual conversation."
     )
 
     errors = []
@@ -991,7 +1034,7 @@ def gemini_text_response(system_prompt, messages):
                 text = (response.text or "").strip()
 
                 if text:
-                    return text
+                    return format_answer_with_takeaways(text)
 
                 errors.append(f"{model_name}: empty response")
                 break
