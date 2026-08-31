@@ -1096,7 +1096,7 @@ def gemini_text_response(system_prompt, messages):
 
 
 def gemini_generate_image(user_text):
-    """Generate an image with Gemini's native image model."""
+    """Generate an image using Gemini 3.1 Flash Image."""
     client = get_gemini_client()
 
     if client is None:
@@ -1112,14 +1112,13 @@ def gemini_generate_image(user_text):
         "Student image request:\n" + str(user_text).strip()
     )
 
-    # Current Gemini image-generation API.
     try:
         interaction = client.interactions.create(
-            model=IMAGE_MODEL,
+            model="gemini-3.1-flash-image",
             input=prompt,
             response_format={
                 "type": "image",
-                "mime_type": "image/png",
+                "mime_type": "image/jpeg",
                 "aspect_ratio": "1:1",
                 "image_size": "1K",
             },
@@ -1130,44 +1129,37 @@ def gemini_generate_image(user_text):
         if output_image is not None:
             data = getattr(output_image, "data", None)
             if data:
-                return base64.b64decode(data)
+                if isinstance(data, str):
+                    return base64.b64decode(data)
+                return bytes(data)
 
-        # Some SDK versions expose image blocks inside interaction steps.
+        # Compatibility path for SDK responses that expose the image as
+        # a model-output content block.
         for step in getattr(interaction, "steps", []) or []:
             for block in getattr(step, "content", []) or []:
-                block_type = getattr(block, "type", "")
-                if block_type == "image":
+                if getattr(block, "type", "") == "image":
                     data = getattr(block, "data", None)
                     if data:
-                        return base64.b64decode(data)
+                        if isinstance(data, str):
+                            return base64.b64decode(data)
+                        return bytes(data)
 
-    except Exception as primary_error:
-        # Compatibility fallback for SDK/model combinations that expose
-        # native image generation through generate_content.
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash-image",
-                contents=prompt,
-            )
+        raise RuntimeError("Gemini returned no generated image.")
 
-            for part in getattr(response, "parts", []) or []:
-                inline_data = getattr(part, "inline_data", None)
-                if inline_data is not None:
-                    raw = getattr(inline_data, "data", None)
-                    if raw:
-                        if isinstance(raw, str):
-                            return base64.b64decode(raw)
-                        return bytes(raw)
+    except Exception as error:
+        error_text = str(error)
 
-        except Exception as fallback_error:
+        if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
             raise RuntimeError(
-                f"Image generation failed. "
-                f"Primary: {primary_error} | Fallback: {fallback_error}"
+                "Image generation is currently unavailable because your "
+                "Gemini image-generation quota is exhausted or set to 0. "
+                "The text Gemini model can still work normally. "
+                "Check your Gemini API project quota/billing before using "
+                "image generation."
             )
 
-        raise RuntimeError(f"Image generation failed: {primary_error}")
+        raise RuntimeError(f"Image generation failed: {error_text}")
 
-    raise RuntimeError("Gemini returned no generated image.")
 
 
 def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
@@ -2016,7 +2008,7 @@ if submit:
 
                 generated_path = os.path.join(
                     IMAGES_DIR,
-                    f"generated_{uuid.uuid4().hex}.png"
+                    f"generated_{uuid.uuid4().hex}.jpg"
                 )
 
                 with open(generated_path, "wb") as f:
