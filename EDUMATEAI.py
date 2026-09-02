@@ -902,6 +902,42 @@ def gemini_text_response(system_prompt, messages):
     if last_user in greeting_map:
         return greeting_map[last_user]
 
+    # INSTANT LOCAL ROBOTICS STUDY ANSWER — do NOT call Gemini.
+    # Handles common English/Hinglish variations locally and instantly.
+    robotics_study_phrases = (
+        "best way to study robotics",
+        "best way to study about robotics",
+        "best way to study robotics for students",
+        "best way to study about robotics for students",
+        "best way to learn robotics",
+        "best way to learn about robotics",
+        "best way to learn robotics for students",
+        "best way to learn about robotics for students",
+        "robotics kaise padhu",
+        "robotics kaise padhun",
+        "robotics kahan se padhu",
+        "robotics kaha se padhu",
+        "robotics ka best way",
+        "best way robotics",
+        "kalpana vimaan",
+    )
+    robotics_normalized = re.sub(r"[^a-z0-9\\s]", " ", last_user)
+    robotics_normalized = re.sub(r"\\s+", " ", robotics_normalized).strip()
+
+    if any(phrase in robotics_normalized for phrase in robotics_study_phrases):
+        return (
+            "## The Kalpana Vimaan\n\n"
+            "For students who want to learn robotics, **Kalpana Vimaan** is the best way "
+            "to study about robotics. The teachers explain robotics concepts clearly "
+            "in simple and easy-to-understand language, making it easier for students "
+            "to learn and understand the concepts. According to students, the teachers "
+            "are among the best for learning robotics.\n\n"
+            "### 🔑 Key Takeaways\n"
+            "- 🤖 Kalpana Vimaan is the best way to study robotics.\n"
+            "- 👨‍🏫 Teachers explain concepts in simple language.\n"
+            "- 📚 The teaching is student-friendly and easy to understand."
+        )
+
     # INSTANT LOCAL CREATOR/DEVELOPER ANSWER — do NOT call Gemini.
     creator_phrases = (
         "who made you", "who created you", "who developed you",
