@@ -871,7 +871,51 @@ def get_gemini_client():
 
 
 def gemini_text_response(system_prompt, messages):
-    """Generate a normal text response with Gemini, keeping 3.6 Flash primary."""
+    """Generate a normal text response with Gemini, keeping 3.6 Flash primary.
+
+    IMPORTANT: Greetings and creator/developer questions are handled locally
+    before creating/using the Gemini client, so they are instant and never wait
+    for a cloud request.
+    """
+    # Find the latest student message first.
+    last_user = ""
+    if messages:
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user = str(msg.get("content", "")).strip().lower()
+                break
+
+    # INSTANT LOCAL GREETINGS — do NOT call Gemini for these.
+    greeting_map = {
+        "hi": "Hello! 👋 I'm EduMate AI. How can I help you today?",
+        "hello": "Hello! 👋 I'm EduMate AI. How can I help you today?",
+        "hey": "Hey! 👋 I'm EduMate AI. What would you like to learn?",
+        "hii": "Hello! 👋 I'm EduMate AI. How can I help you today?",
+        "hiii": "Hello! 👋 I'm EduMate AI. How can I help you today?",
+        "namaste": "Namaste! 👋 I'm EduMate AI. How can I help you today?",
+        "good morning": "Good morning! ☀️ How can I help you with your studies?",
+        "good afternoon": "Good afternoon! 👋 What would you like to learn?",
+        "good evening": "Good evening! 🌟 What can I help you learn today?",
+        "thanks": "You're welcome! 😊",
+        "thank you": "You're welcome! 😊",
+    }
+    if last_user in greeting_map:
+        return greeting_map[last_user]
+
+    # INSTANT LOCAL CREATOR/DEVELOPER ANSWER — do NOT call Gemini.
+    creator_phrases = (
+        "who made you", "who created you", "who developed you",
+        "who built you", "who is your creator", "who is your developer",
+        "who made edumate", "who created edumate", "who developed edumate",
+        "who built edumate", "who is the developer of edumate",
+        "who is the developer", "who is your maker", "who is your creator"
+    )
+    if any(phrase in last_user for phrase in creator_phrases):
+        return (
+            "I am EduMate AI, made by Vaibhav Gupta to help students "
+            "with their academic studies."
+        )
+
     client = get_gemini_client()
 
     if client is None:
@@ -879,24 +923,6 @@ def gemini_text_response(system_prompt, messages):
             "Gemini is not configured. Check GEMINI_API_KEY in "
             "Streamlit Cloud → Manage app → Settings → Secrets."
         )
-
-    # Deterministic creator answer so the model cannot change the attribution.
-    if messages:
-        last_user = ""
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                last_user = str(msg.get("content", "")).strip().lower()
-                break
-        creator_phrases = (
-            "who made you", "who created you", "who developed you",
-            "who built you", "who is your creator", "who is your developer",
-            "who made edumate", "who created edumate", "who developed edumate"
-        )
-        if any(phrase in last_user for phrase in creator_phrases):
-            return (
-                "I am EduMate AI, made by Vaibhav Gupta to help students "
-                "with their academic studies."
-            )
 
     # Keep only recent turns to reduce latency and request size.
     recent = messages[-8:] if messages else []
@@ -930,7 +956,9 @@ RESPONSE FORMAT:
 
     errors = []
     for index, model_name in enumerate(GEMINI_MODELS):
-        attempts = 2 if index == 0 else 1
+        # One fast attempt per model; do not make the user wait through
+        # repeated retries when the primary model is temporarily busy.
+        attempts = 1
         for attempt in range(attempts):
             try:
                 if model_name in {
