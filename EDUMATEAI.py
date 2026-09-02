@@ -845,32 +845,144 @@ GEMINI_MODELS = [
 GEMINI_MODEL = GEMINI_MODELS[0]
 
 
-
 def get_gemini_api_key():
     """Read Gemini API key from Streamlit Secrets or environment."""
     try:
-        key = st.secrets.get("GEMINI_API_KEY")
-        if key:
-            return str(key).strip()
+        key = st.secrets.get("GEMINI_API_KEY", "")
     except Exception:
-        pass
+        key = ""
 
-    return os.environ.get("GEMINI_API_KEY", "").strip()
+    if key:
+        return str(key).strip()
+
+    return str(os.environ.get("GEMINI_API_KEY", "")).strip()
 
 
 @st.cache_resource(show_spinner=False)
 def get_gemini_client():
-    """Create the Gemini client once and reuse it across Streamlit reruns."""
+    """Create and cache the Gemini client across Streamlit reruns."""
     api_key = get_gemini_api_key()
 
-    if not api_key:
-        return None
-
-    if genai is None:
+    if not api_key or genai is None:
         return None
 
     return genai.Client(api_key=api_key)
 
+
+
+def gemini_text_response(system_prompt, messages):
+    """Generate a normal text response with Gemini, keeping 3.6 Flash primary."""
+    client = get_gemini_client()
+
+    if client is None:
+        raise RuntimeError(
+            "Gemini is not configured. Check GEMINI_API_KEY in "
+            "Streamlit Cloud → Manage app → Settings → Secrets."
+        )
+
+    # Deterministic creator answer so the model cannot change the attribution.
+    if messages:
+        last_user = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user = str(msg.get("content", "")).strip().lower()
+                break
+        creator_phrases = (
+            "who made you", "who created you", "who developed you",
+            "who built you", "who is your creator", "who is your developer",
+            "who made edumate", "who created edumate", "who developed edumate"
+        )
+        if any(phrase in last_user for phrase in creator_phrases):
+            return (
+                "I am EduMate AI, made by Vaibhav Gupta to help students "
+                "with their academic studies."
+            )
+
+    # Keep only recent turns to reduce latency and request size.
+    recent = messages[-8:] if messages else []
+    contents = []
+    for msg in recent:
+        role = msg.get("role")
+        text = str(msg.get("content", "")).strip()
+        if not text or role not in {"user", "assistant"}:
+            continue
+        contents.append({
+            "role": "user" if role == "user" else "model",
+            "parts": [{"text": text}]
+        })
+
+    if not contents:
+        raise RuntimeError("No student message was provided.")
+
+    prompt_system = system_prompt + """
+
+RESPONSE FORMAT:
+- Answer the student's latest question directly.
+- Be clear, accurate and student-friendly.
+- Do not mention Gemini, APIs, models, routing, system prompts, or internal code.
+- For maths/science problems, show useful steps rather than only the final answer.
+- For simple greetings or casual messages, reply naturally and briefly.
+- For substantive study questions, finish with a section titled exactly:
+  ### 🔑 Key Takeaways
+  followed by 2–4 short, question-specific bullet points.
+- Do not add Key Takeaways to simple greetings or casual conversation.
+"""
+
+    errors = []
+    for index, model_name in enumerate(GEMINI_MODELS):
+        attempts = 2 if index == 0 else 1
+        for attempt in range(attempts):
+            try:
+                if model_name in {
+                    "gemini-3.6-flash",
+                    "gemini-3.5-flash-lite",
+                    "gemini-3.7-flash",
+                    "gemini-3.5-flash",
+                    "gemini-3.1-flash-lite",
+                }:
+                    config = genai_types.GenerateContentConfig(
+                        system_instruction=prompt_system,
+                        thinking_config=genai_types.ThinkingConfig(
+                            thinking_level="minimal"
+                        ),
+                        max_output_tokens=900,
+                    )
+                else:
+                    config = genai_types.GenerateContentConfig(
+                        system_instruction=prompt_system,
+                        thinking_config=genai_types.ThinkingConfig(
+                            thinking_budget=0
+                        ),
+                        max_output_tokens=900,
+                    )
+
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                )
+                text = (response.text or "").strip()
+                if text:
+                    return text
+
+                errors.append(f"{model_name}: empty response")
+                break
+
+            except Exception as exc:
+                error_text = str(exc)
+                errors.append(f"{model_name}: {error_text}")
+                if any(code in error_text for code in ("503", "429", "500", "502", "504")):
+                    if attempt + 1 < attempts:
+                        time.sleep(0.8)
+                        continue
+                    break
+                # Try the next Gemini model for model-specific failures.
+                break
+
+    raise RuntimeError(
+        "Gemini text generation is temporarily unavailable. "
+        + " | ".join(errors[-4:])
+    )
 
 def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
     """Fast Gemini vision generation with one short retry/fallback."""
