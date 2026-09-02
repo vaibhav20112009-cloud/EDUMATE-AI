@@ -845,6 +845,33 @@ GEMINI_MODELS = [
 GEMINI_MODEL = GEMINI_MODELS[0]
 
 
+
+def get_gemini_api_key():
+    """Read Gemini API key from Streamlit Secrets or environment."""
+    try:
+        key = st.secrets.get("GEMINI_API_KEY")
+        if key:
+            return str(key).strip()
+    except Exception:
+        pass
+
+    return os.environ.get("GEMINI_API_KEY", "").strip()
+
+
+@st.cache_resource(show_spinner=False)
+def get_gemini_client():
+    """Create the Gemini client once and reuse it across Streamlit reruns."""
+    api_key = get_gemini_api_key()
+
+    if not api_key:
+        return None
+
+    if genai is None:
+        return None
+
+    return genai.Client(api_key=api_key)
+
+
 def gemini_image_response(system_prompt, user_text, image_bytes, image_name):
     """Fast Gemini vision generation with one short retry/fallback."""
     client = get_gemini_client()
@@ -1834,4 +1861,3 @@ st.caption(
     f"{st.session_state.selected_mode} • "
     f"Developed by Vaibhav Gupta"
 )
-
